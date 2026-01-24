@@ -1,29 +1,68 @@
-from pathlib import Path
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Body Composition Tracker", layout="wide")
 st.title("📊 Body Composition Tracker")
 
-# ---------- File paths ----------
-BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data.csv"
+# ----------------------------
+# Google Sheets setup
+# ----------------------------
+SHEET_ID = st.secrets["SHEET_ID"]
 
-# ---------- Load data ----------
-if DATA_PATH.exists():
-    data = pd.read_csv(DATA_PATH, parse_dates=["date"])
-else:
-    # Start empty if file missing (still lets app run)
-    data = pd.DataFrame(columns=["date", "weight", "body_fat"])
-    data["date"] = pd.to_datetime(data["date"])
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-# Ensure correct dtypes
-if not data.empty:
-    data["date"] = pd.to_datetime(data["date"], errors="coerce")
-    data["weight"] = pd.to_numeric(data["weight"], errors="coerce")
-    data["body_fat"] = pd.to_numeric(data["body_fat"], errors="coerce")
+creds = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=SCOPES
+)
 
-# ---------- Log form ----------
+gc = gspread.authorize(creds)
+sh = gc.open_by_key(SHEET_ID)
+ws = sh.sheet1  # first tab
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def load_data() -> pd.DataFrame:
+    rows = ws.get_all_records()  # uses row 1 as headers
+    if not rows:
+        return pd.DataFrame(columns=["date", "weight", "body_fat"])
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+    df["body_fat"] = pd.to_numeric(df["body_fat"], errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date")
+    return df
+
+def upsert_row(entry_date, entry_weight, entry_bf):
+    """
+    If date exists, update that row. Otherwise append.
+    Assumes headers: date, weight, body_fat in row 1.
+    """
+    date_str = pd.to_datetime(entry_date).strftime("%Y-%m-%d")
+
+    all_values = ws.get_all_values()  # includes header row
+    # Find existing row by date in column A (index 0)
+    target_row = None
+    for i, row in enumerate(all_values[1:], start=2):  # start=2 = row number in sheet
+        if len(row) > 0 and row[0] == date_str:
+            target_row = i
+            break
+
+    if target_row:
+        ws.update(f"A{target_row}:C{target_row}", [[date_str, float(entry_weight), float(entry_bf)]])
+    else:
+        ws.append_row([date_str, float(entry_weight), float(entry_bf)], value_input_option="USER_ENTERED")
+
+# ----------------------------
+# Log form (phone-friendly)
+# ----------------------------
 st.subheader("Log a new entry")
 
 with st.form("log", clear_on_submit=True):
@@ -38,31 +77,22 @@ with st.form("log", clear_on_submit=True):
     submitted = st.form_submit_button("Save")
 
 if submitted:
-    # Build row
-    new_row = pd.DataFrame([{
-        "date": pd.to_datetime(entry_date),
-        "weight": float(entry_weight),
-        "body_fat": float(entry_bf),
-    }])
-
-    # Append + de-dupe by date (keeps latest entry for the same date)
-    data = pd.concat([data, new_row], ignore_index=True)
-    data = data.sort_values("date")
-    data = data.drop_duplicates(subset=["date"], keep="last")
-
-    # Save back to CSV
-    data.to_csv(DATA_PATH, index=False)
-
-    st.success("Saved ✅")
+    upsert_row(entry_date, entry_weight, entry_bf)
+    st.success("Saved to Google Sheet ✅")
     st.rerun()
 
-# ---------- Derived metrics ----------
+# ----------------------------
+# Load + compute metrics
+# ----------------------------
+data = load_data()
+
 if not data.empty:
-    data = data.sort_values("date")
     data["fat_mass"] = (data["weight"] * (data["body_fat"] / 100)).round(2)
     data["lean_mass"] = (data["weight"] - data["fat_mass"]).round(2)
 
-# ---------- Display ----------
+# ----------------------------
+# Display
+# ----------------------------
 st.subheader("Raw Data")
 st.dataframe(
     data.style.format({
