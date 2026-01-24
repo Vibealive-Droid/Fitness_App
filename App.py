@@ -22,20 +22,8 @@ creds = Credentials.from_service_account_info(
 )
 
 gc = gspread.authorize(creds)
-# ---- DEBUG: confirm what account we are + whether we can see any sheets ----
-st.write("Using service account:", st.secrets["gcp_service_account"]["client_email"])
-st.write("Sheet ID from secrets:", SHEET_ID)
-
-try:
-    # Try to open the sheet by ID (your current approach)
-    sh = gc.open_by_key(SHEET_ID)
-    st.success("Opened sheet by SHEET_ID ✅")
-except Exception as e:
-    st.error("Could NOT open sheet by SHEET_ID ❌")
-    st.write("Likely causes: wrong Sheet ID or sheet not shared to the service account.")
-    st.stop()
-
-ws = sh.sheet1
+sh = gc.open_by_key(SHEET_ID)
+ws = sh.sheet1  # first tab
 
 # ----------------------------
 # Helpers
@@ -124,4 +112,5 @@ else:
 st.subheader("Body Fat %")
 if not data.empty:
     st.line_chart(data.set_index("date")[["body_fat"]])
+
 
