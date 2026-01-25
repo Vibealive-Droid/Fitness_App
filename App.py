@@ -140,6 +140,11 @@ if start_date > end_date:
 mask = (data["date"].dt.date >= start_date) & (data["date"].dt.date <= end_date)
 data_view = data.loc[mask].copy()
 
+# Shared X-axis domain for all charts
+x_min = data_view["date"].min()
+x_max = data_view["date"].max()
+
+
 # ----------------------------
 # Display
 # ----------------------------
@@ -207,16 +212,33 @@ if not data_view.empty:
         color="#E45756",
         interpolate="monotone"
     ).encode(
-        x=alt.X("date:T", title="Date"),
-        y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=[5, 30])),
+        x=alt.X(
+            "date:T",
+            title="Date",
+            scale=alt.Scale(domain=[x_min, x_max]),  # 🔑 shared X domain
+            axis=alt.Axis(
+                tickCount=10,
+                titlePadding=20
+            )
+        ),
+        y=alt.Y(
+            "body_fat:Q",
+            title="Body Fat %",
+            scale=alt.Scale(domain=[5, 30])
+        ),
         tooltip=[
             alt.Tooltip("date:T", title="Date"),
             alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
         ],
-    ).properties(height=300)
+    ).properties(
+        height=300,
+        padding={"left": 10, "right": 10, "top": 10, "bottom": 40}
+    )
 
     st.altair_chart(bf_chart, use_container_width=True)
 else:
     st.info("No data in the selected date range.")
+
+
 
 
