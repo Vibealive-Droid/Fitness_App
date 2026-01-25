@@ -115,7 +115,7 @@ if not data.empty:
         x=alt.X("date:T", title="Date"),
         y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[145, 225])),
         color=alt.Color("metric:N", title="")
-    ).properties(height=350)
+    ).properties(height=400)
 
     st.altair_chart(chart, use_container_width=True)
 else:
@@ -124,6 +124,7 @@ else:
 st.subheader("Body Fat %")
 if not data.empty:
     st.line_chart(data.set_index("date")[["body_fat"]])
+
 
 
 
