@@ -23,7 +23,7 @@ creds = Credentials.from_service_account_info(
 
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(SHEET_ID)
-ws = sh.sheet1  # first tab
+ws = sh.worksheet("Raw_Data")  # first tab
 
 # ----------------------------
 # Helpers
@@ -112,5 +112,6 @@ else:
 st.subheader("Body Fat %")
 if not data.empty:
     st.line_chart(data.set_index("date")[["body_fat"]])
+
 
 
