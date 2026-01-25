@@ -123,8 +123,21 @@ else:
 
 st.subheader("Body Fat %")
 if not data.empty:
-    st.line_chart(data.set_index("date")[["body_fat"]])
+    bf_df = data[["date", "body_fat"]].copy()
+    bf_df["date"] = pd.to_datetime(bf_df["date"])
 
+    bf_chart = alt.Chart(bf_df).mark_line(color="#E45756").encode(
+        x=alt.X("date:T", title="Date"),
+        y=alt.Y(
+            "body_fat:Q",
+            title="Body Fat %",
+            scale=alt.Scale(domain=[5, 30])
+        )
+    ).properties(height=300)
+
+    st.altair_chart(bf_chart, use_container_width=True)
+else:
+    st.info("No data yet. Add your first entry above.")
 
 
 
