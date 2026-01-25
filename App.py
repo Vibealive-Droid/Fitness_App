@@ -164,15 +164,32 @@ if not data_view.empty:
     melted = plot_df.melt("date", var_name="metric", value_name="value")
 
     weight_chart = alt.Chart(melted).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date"),
-        y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[165, 225])),
+        x=alt.X(
+            "date:T",
+            title="Date",
+            axis=alt.Axis(
+                labelAngle=0,
+                labelOverlap=True,
+                tickCount=10,          # fewer ticks = less clutter
+                titlePadding=20        # pushes the word "Date" down
+            )
+        ),
+        y=alt.Y(
+            "value:Q",
+            title="Lbs",
+            scale=alt.Scale(domain=[145, 225]),
+            axis=alt.Axis(titlePadding=10)
+        ),
         color=alt.Color("metric:N", title=""),
         tooltip=[
             alt.Tooltip("date:T", title="Date"),
             alt.Tooltip("metric:N", title="Metric"),
             alt.Tooltip("value:Q", title="Lbs", format=".2f"),
         ],
-    ).properties(height=350)
+    ).properties(
+        height=360,
+        padding={"left": 10, "right": 10, "top": 10, "bottom": 40}  # gives room for x labels + "Date"
+    )
 
     st.altair_chart(weight_chart, use_container_width=True)
 else:
@@ -201,3 +218,4 @@ if not data_view.empty:
     st.altair_chart(bf_chart, use_container_width=True)
 else:
     st.info("No data in the selected date range.")
+
