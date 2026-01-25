@@ -1,3 +1,4 @@
+import altair as alt
 import streamlit as st
 import pandas as pd
 import gspread
@@ -105,13 +106,25 @@ st.dataframe(
 
 st.subheader("Weight Trend")
 if not data.empty:
-    st.line_chart(data.set_index("date")[["weight", "lean_mass"]])
+    plot_df = data[["date", "weight", "lean_mass"]].copy()
+    plot_df["date"] = pd.to_datetime(plot_df["date"])
+
+    melted = plot_df.melt("date", var_name="metric", value_name="value")
+
+    chart = alt.Chart(melted).mark_line().encode(
+        x=alt.X("date:T", title="Date"),
+        y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[165, 225])),
+        color=alt.Color("metric:N", title="")
+    ).properties(height=350)
+
+    st.altair_chart(chart, use_container_width=True)
 else:
     st.info("No data yet. Add your first entry above.")
 
 st.subheader("Body Fat %")
 if not data.empty:
     st.line_chart(data.set_index("date")[["body_fat"]])
+
 
 
 
