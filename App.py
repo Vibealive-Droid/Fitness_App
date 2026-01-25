@@ -1,3 +1,4 @@
+import datetime as dt
 import altair as alt
 import streamlit as st
 import pandas as pd
@@ -85,7 +86,45 @@ if submitted:
 # ----------------------------
 # Load + compute metrics
 # ----------------------------
+
 data = load_data()
+
+# --- Date range filter (UI) ---
+data["date"] = pd.to_datetime(data["date"])
+
+# --- Date range filter (UI) ---
+data["date"] = pd.to_datetime(data["date"])
+
+max_date = data["date"].max().date()
+min_date = data["date"].min().date()
+
+default_start = max(min_date, (pd.Timestamp(max_date) - pd.DateOffset(months=12)).date())
+
+start_date, end_date = st.date_input(
+    "Date range",
+    value=(default_start, max_date),
+    min_value=min_date,
+    max_value=max_date,
+)
+
+mask = (data["date"].dt.date >= start_date) & (data["date"].dt.date <= end_date)
+data_view = data.loc[mask].copy()
+
+max_date = data["date"].max().date()
+min_date = data["date"].min().date()
+
+default_start = max(min_date, (pd.Timestamp(max_date) - pd.DateOffset(months=12)).date())
+
+start_date, end_date = st.date_input(
+    "Date range",
+    value=(default_start, max_date),
+    min_value=min_date,
+    max_value=max_date,
+)
+
+mask = (data["date"].dt.date >= start_date) & (data["date"].dt.date <= end_date)
+data_view = data.loc[mask].copy()
+
 
 if not data.empty:
     data["fat_mass"] = (data["weight"] * (data["body_fat"] / 100)).round(2)
@@ -144,6 +183,7 @@ if not data.empty:
     ).properties(height=300)
 
     st.altair_chart(bf_chart, use_container_width=True)
+
 
 
 
