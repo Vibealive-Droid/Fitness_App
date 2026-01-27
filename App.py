@@ -175,7 +175,7 @@ if not data_view.empty:
             axis=alt.Axis(
                 labelAngle=0,
                 labelOverlap=True,
-                tickCount="month",          # fewer ticks = less clutter
+                tickCount="10",          # fewer ticks = less clutter
                 titlePadding=20        # pushes the word "Date" down
             )
         ),
@@ -238,6 +238,7 @@ if not data_view.empty:
     st.altair_chart(bf_chart, use_container_width=True)
 else:
     st.info("No data in the selected date range.")
+
 
 
 
