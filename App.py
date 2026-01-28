@@ -269,19 +269,30 @@ st.subheader("Body Fat %")
 if not body_view.empty:
     bf_df = body_view[["date", "body_fat"]].copy()
 
-    bf_chart = alt.Chart(bf_df).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max]),
-                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True)),
-        y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=[5, 30])),
-        tooltip=[
-            alt.Tooltip("date:T", title="Date"),
-            alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
-        ],
-    ).properties(height=300, padding={"left": 10, "right": 10, "top": 10, "bottom": 40)
+    bf_chart = (
+        alt.Chart(bf_df)
+        .mark_line(interpolate="monotone")
+        .encode(
+            x=alt.X(
+                "date:T",
+                title="Date",
+                scale=alt.Scale(domain=[x_min, x_max]),
+                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True),
+            ),
+            y=alt.Y(
+                "body_fat:Q",
+                title="Body Fat %",
+                scale=alt.Scale(domain=[5, 30]),
+            ),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
+            ],
+        )
+        .properties(
+            height=300,
+            padding={"left": 10, "right": 1
 
-    st.altair_chart(bf_chart, use_container_width=True)
-else:
-    st.info("No data in the selected date range.")
 
 # ============================================================
 # Energy + Training
@@ -692,5 +703,6 @@ note = st.text_input("Quick note (optional)", value="")
 if DEBUG:
     st.subheader("Debug: manual inputs")
     st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
 
 
