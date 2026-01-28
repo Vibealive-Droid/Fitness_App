@@ -206,6 +206,11 @@ combined["fat_change"] = combined["fat_mass"].diff()
 if "calories_avg" in combined.columns and "expenditure_avg" in combined.columns:
     combined["energy_balance"] = combined["calories_avg"] - combined["expenditure_avg"]
 
+# Date Corrector
+for df in (body, energy_view, combined):
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+
 # ----------------------------
 # Show combined table (optional)
 # ----------------------------
@@ -288,3 +293,4 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
+
