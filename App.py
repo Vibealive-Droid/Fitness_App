@@ -228,22 +228,39 @@ if not body_view.empty:
     plot_df = body_view[["date", "weight", "lean_mass"]].copy()
     melted = plot_df.melt("date", var_name="metric", value_name="value")
 
-    weight_chart = alt.Chart(melted).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max]),
-                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True)),
-        y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[145, 225]),
-                axis=alt.Axis(titlePadding=10)),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[
-            alt.Tooltip("date:T", title="Date"),
-            alt.Tooltip("metric:N", title="Metric"),
-            alt.Tooltip("value:Q", title="Lbs", format=".2f"),
-        ],
-    ).properties(height=360, padding={"left": 10, "right": 10, "top": 10, "bottom": 40))
+    weight_chart = (
+        alt.Chart(melted)
+        .mark_line(interpolate="monotone")
+        .encode(
+            x=alt.X(
+                "date:T",
+                title="Date",
+                scale=alt.Scale(domain=[x_min, x_max]),
+                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True),
+            ),
+            y=alt.Y(
+                "value:Q",
+                title="Lbs",
+                scale=alt.Scale(domain=[145, 225]),
+                axis=alt.Axis(titlePadding=10),
+            ),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("value:Q", title="Lbs", format=".2f"),
+            ],
+        )
+        .properties(
+            height=360,
+            padding={"left": 10, "right": 10, "top": 10, "bottom": 40},
+        )
+    )
 
     st.altair_chart(weight_chart, use_container_width=True)
 else:
     st.info("No body data in the selected date range.")
+
 
 # ----------------------------
 # Body Fat % (Altair)
@@ -675,4 +692,5 @@ note = st.text_input("Quick note (optional)", value="")
 if DEBUG:
     st.subheader("Debug: manual inputs")
     st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
 
