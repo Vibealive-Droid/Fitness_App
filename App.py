@@ -408,10 +408,17 @@ if "energy_balance" in combined.columns and combined["energy_balance"].notna().a
     st.subheader("Estimated energy balance (Calories − Expenditure)")
     eb = combined[["date", "energy_balance"]].dropna()
 
+    # symmetric domain around 0, minimum ±600, auto-expand if needed
+    max_abs = float(eb["energy_balance"].abs().max())
+    dom = max(600.0, max_abs)
+    dom = (int(dom / 50) + 1) * 50  # round up to nearest 50 for a clean axis
+
     eb_chart = alt.Chart(eb).mark_bar().encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max]),
                 axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True)),
-        y=alt.Y("energy_balance:Q", title="kcal / day (avg)"),
+        y=alt.Y("energy_balance:Q",
+                title="kcal / day (avg)",
+                scale=alt.Scale(domain=[-dom, dom])),
         tooltip=[alt.Tooltip("date:T"), alt.Tooltip("energy_balance:Q", format=".0f")]
     ).properties(height=250, padding={"left": 10, "right": 10, "top": 10, "bottom": 40})
 
@@ -463,5 +470,6 @@ if has_training_metric:
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("No training data in the selected date range yet.")
+
 
 
