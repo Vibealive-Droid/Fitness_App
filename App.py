@@ -28,7 +28,7 @@ sh = gc.open_by_key(SHEET_ID)
 # ✅ Tab names
 WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
-WS_TRAIN_WEEKLY = "Weekly_Training"   # <-- updated name
+WS_TRAIN_WEEKLY = "Weekly_Training"
 
 # ----------------------------
 # Helpers
@@ -39,9 +39,13 @@ def load_sheet(worksheet_name: str) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
+    """
+    Keep df[col] as pandas datetime for filtering + Altair.
+    Normalizes time to midnight for consistency.
+    """
     if df.empty or col not in df.columns:
         return df
-    df[col] = pd.to_datetime(df[col], errors="coerce")
+    df[col] = pd.to_datetime(df[col], errors="coerce").dt.normalize()
     df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
     return df
 
@@ -57,6 +61,17 @@ def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataF
     mask = (df[col].dt.date >= start_date) & (df[col].dt.date <= end_date)
     return df.loc[mask].copy()
 
+def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
+    """
+    For table display only: convert to python date (YYYY-MM-DD look).
+    Keeps charts safe because we only apply this on a copy.
+    """
+    if df.empty or col not in df.columns:
+        return df
+    out = df.copy()
+    out[col] = pd.to_datetime(out[col], errors="coerce").dt.date
+    return out
+
 # ----------------------------
 # Load BODY weekly
 # ----------------------------
@@ -64,15 +79,13 @@ body = load_sheet(WS_BODY_WEEKLY)
 body = body.rename(columns={"date_time": "date"}) if "date_time" in body.columns and "date" not in body.columns else body
 body = normalise_date_col(body, "date")
 body = to_num(body, ["weight", "body_fat", "fat_free_mass"])
-body["date"] = pd.to_datetime(body["date"], errors="coerce").dt.date
-
 
 if not body.empty:
     body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
     body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
 
 # ----------------------------
-# Date range selector (Option A)
+# Date range selector
 # ----------------------------
 st.subheader("Date range")
 
@@ -103,14 +116,16 @@ x_max = body_view["date"].max()
 # Display: Body table
 # ----------------------------
 st.subheader("Weekly Body Comp (filtered)")
+body_table = date_for_table(body_view)
+
 st.dataframe(
-    body_view.style.format({
+    body_table.style.format({
         "weight": "{:.2f}",
         "body_fat": "{:.2f}",
         "fat_free_mass": "{:.2f}",
         "fat_mass": "{:.2f}",
         "lean_mass": "{:.2f}",
-    }) if not body_view.empty else body_view
+    }) if not body_table.empty else body_table
 )
 
 # ----------------------------
@@ -145,7 +160,7 @@ st.subheader("Body Fat %")
 if not body_view.empty:
     bf_df = body_view[["date", "body_fat"]].copy()
 
-    bf_chart = alt.Chart(bf_df).mark_line(color="#E45756", interpolate="monotone").encode(
+    bf_chart = alt.Chart(bf_df).mark_line(interpolate="monotone").encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max]),
                 axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True)),
         y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=[5, 30])),
@@ -170,10 +185,13 @@ st.header("⚡ Energy Balance + Training")
 energy = load_sheet(WS_ENERGY_WEEKLY)
 energy = normalise_date_col(energy, "date")
 
-# Try to coerce common columns (ignore if missing)
+# Your actual Weekly_Energy columns
 energy = to_num(energy, [
-    "calories_avg", "expenditure_avg", "protein_avg", "carbs_avg", "fat_avg",
-    "target_calories_avg", "steps_avg", "days_logged"
+    "days_logged",
+    "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
+    "avg_protein_g", "avg_carbs_g", "avg_fat_g",
+    "protein_adherence_avg", "energy_adherence_avg",
+    "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps"
 ])
 
 energy_view = filter_range(energy, start_date, end_date, "date")
@@ -183,19 +201,26 @@ energy_view = filter_range(energy, start_date, end_date, "date")
 # ----------------------------
 train = load_sheet(WS_TRAIN_WEEKLY)
 train = normalise_date_col(train, "date")
-train = to_num(train, ["sets_total", "volume_total", "workouts_completed", "avg_rir", "muscle_groups_hit_count"])
+
+# Your actual Weekly_Training columns (note avg_RIR casing)
+train = to_num(train, [
+    "sets_total", "volume_total", "workouts_completed",
+    "avg_RIR", "muscle_groups_hit_count",
+    "training_minutes_total", "avg_workout_minutes"
+])
+
 train_view = filter_range(train, start_date, end_date, "date")
 
 # ----------------------------
-# Join
+# Join (weekly on "date")
 # ----------------------------
 combined = body_view[["date", "weight", "body_fat", "fat_free_mass", "fat_mass", "lean_mass"]].copy()
 
 if not energy_view.empty:
-    combined = combined.merge(energy_view, on="date", how="left", suffixes=("", "_energy"))
+    combined = combined.merge(energy_view, on="date", how="left")
 
 if not train_view.empty:
-    combined = combined.merge(train_view, on="date", how="left", suffixes=("", "_train"))
+    combined = combined.merge(train_view, on="date", how="left")
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
@@ -204,27 +229,50 @@ combined["weight_change"] = combined["weight"].diff()
 combined["lean_change"] = combined["lean_mass"].diff()
 combined["fat_change"] = combined["fat_mass"].diff()
 
-# Energy balance
-if "calories_avg" in combined.columns and "expenditure_avg" in combined.columns:
-    combined["energy_balance"] = combined["calories_avg"] - combined["expenditure_avg"]
-
-# Date Corrector
-for df in (body, energy_view, combined):
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"]).dt.date
+# Energy balance (weekly avg kcal/day)
+if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
+    combined["energy_balance"] = combined["avg_calories"] - combined["avg_expenditure"]
 
 # ----------------------------
 # Show combined table (optional)
 # ----------------------------
 with st.expander("Combined weekly table (filtered)", expanded=False):
-    st.dataframe(combined)
+    combined_table = date_for_table(combined)
+
+    # Optional rounding to keep it clean
+    for c in [
+        "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
+        "avg_protein_g", "avg_carbs_g", "avg_fat_g",
+        "protein_adherence_avg", "energy_adherence_avg",
+        "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps",
+        "sets_total", "volume_total", "workouts_completed", "avg_RIR",
+        "muscle_groups_hit_count", "training_minutes_total", "avg_workout_minutes",
+        "energy_balance", "weight_change", "lean_change", "fat_change"
+    ]:
+        if c in combined_table.columns:
+            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce")
+
+    # round some common fields
+    if "protein_adherence_avg" in combined_table.columns:
+        combined_table["protein_adherence_avg"] = combined_table["protein_adherence_avg"].round(3)
+    if "energy_adherence_avg" in combined_table.columns:
+        combined_table["energy_adherence_avg"] = combined_table["energy_adherence_avg"].round(3)
+
+    for c in combined_table.columns:
+        if c in ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta", "energy_balance", "avg_steps"]:
+            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(0)
+        if c in ["weight", "fat_free_mass", "fat_mass", "lean_mass", "weight_change", "lean_change", "fat_change",
+                 "avg_scale_weight_lb", "avg_trend_weight_lb"]:
+            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(2)
+
+    st.dataframe(combined_table)
 
 # ----------------------------
 # Charts: Calories vs Expenditure
 # ----------------------------
-if not energy_view.empty and ("calories_avg" in combined.columns) and ("expenditure_avg" in combined.columns):
+if not energy_view.empty and ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
     st.subheader("Calories vs Expenditure (weekly)")
-    ce = combined[["date", "calories_avg", "expenditure_avg"]].copy()
+    ce = combined[["date", "avg_calories", "avg_expenditure"]].copy()
     ce_m = ce.melt("date", var_name="metric", value_name="value").dropna()
 
     ce_chart = alt.Chart(ce_m).mark_line(interpolate="monotone").encode(
@@ -281,7 +329,6 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     metric = "volume_total" if "volume_total" in combined.columns and combined["volume_total"].notna().any() else "sets_total"
 
     tl = combined[["date", "lean_mass", metric]].copy().dropna(subset=["lean_mass"])
-
     tl_m = tl.melt("date", var_name="metric", value_name="value")
 
     tl_chart = alt.Chart(tl_m).mark_line(interpolate="monotone").encode(
@@ -295,9 +342,3 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
-
-
-
-
-
-
