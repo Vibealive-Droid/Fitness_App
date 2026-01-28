@@ -105,6 +105,9 @@ if not body.empty:
 # ----------------------------
 # Date range selector
 # ----------------------------
+# ----------------------------
+# Date range selector (bulletproof)
+# ----------------------------
 st.subheader("Date range")
 
 if body.empty:
@@ -115,18 +118,54 @@ min_date = body["date"].min().date()
 max_date = body["date"].max().date()
 default_start = max(min_date, (pd.Timestamp(max_date) - pd.DateOffset(months=12)).date())
 
-start_date, end_date = st.date_input(
-    "Select range",
-    value=(default_start, max_date),
-    min_value=min_date,
-    max_value=max_date,
-)
+col1, col2, col3 = st.columns([1, 1, 2])
+
+with col1:
+    start_date = st.date_input(
+        "Start date",
+        value=default_start,
+        min_value=min_date,
+        max_value=max_date,
+        key="start_date",
+    )
+
+with col2:
+    end_date = st.date_input(
+        "End date",
+        value=max_date,
+        min_value=min_date,
+        max_value=max_date,
+        key="end_date",
+    )
+
+with col3:
+    include_report_monday = st.checkbox(
+        "Include current week (report Monday)",
+        value=True,
+        help="Weekly Energy/Training rows are stamped on the next Monday. This includes that row so you can see this week’s progress.",
+        key="include_report_monday",
+    )
+
+# Safety: handle weird states
+if start_date is None or end_date is None:
+    st.warning("Please select both a start and end date.")
+    st.stop()
 
 if start_date > end_date:
     st.error("Start date must be before end date.")
     st.stop()
 
-body_view = filter_range(body, start_date, end_date, "date")
+# Optional: extend end_date by 7 days so the stamped weekly row appears
+end_date_for_weekly = end_date
+if include_report_monday:
+    end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
+
+
+if start_date > end_date:
+    st.error("Start date must be before end date.")
+    st.stop()
+
+body_view = filter_range(body, start_date, end_date_for_weekly, "date")
 x_min = body_view["date"].min()
 x_max = body_view["date"].max()
 
@@ -212,7 +251,7 @@ energy = to_num(energy, [
     "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps"
 ])
 
-energy_view = filter_range(energy, start_date, end_date, "date")
+energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
 
 # ----------------------------
 # Load weekly TRAINING
@@ -227,7 +266,7 @@ train = to_num(train, [
     "training_minutes_total", "avg_workout_minutes"
 ])
 
-train_view = filter_range(train, start_date, end_date, "date")
+train_view = filter_range(train, start_date, end_date_for_weekly, "date")
 
 # ----------------------------
 # Join (weekly on "date")
@@ -390,3 +429,4 @@ if has_training_metric:
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("No training data in the selected date range yet.")
+
