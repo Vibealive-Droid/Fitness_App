@@ -45,11 +45,26 @@ def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     """
     if df.empty or col not in df.columns:
         return df
+    df = df.copy()
     df[col] = pd.to_datetime(df[col], errors="coerce").dt.normalize()
     df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
     return df
 
+def align_to_monday(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
+    """
+    Force weekly dates to the Monday of their week.
+    Helps when one sheet uses Sunday vs Monday vs timestamps.
+    """
+    if df.empty or col not in df.columns:
+        return df
+    df = df.copy()
+    df[col] = pd.to_datetime(df[col], errors="coerce").dt.normalize()
+    df[col] = df[col] - pd.to_timedelta(df[col].dt.weekday, unit="D")
+    df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
+    return df
+
 def to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    df = df.copy()
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -72,12 +87,15 @@ def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     out[col] = pd.to_datetime(out[col], errors="coerce").dt.date
     return out
 
+DEBUG = st.sidebar.checkbox("Debug", value=False)
+
 # ----------------------------
 # Load BODY weekly
 # ----------------------------
 body = load_sheet(WS_BODY_WEEKLY)
 body = body.rename(columns={"date_time": "date"}) if "date_time" in body.columns and "date" not in body.columns else body
 body = normalise_date_col(body, "date")
+body = align_to_monday(body, "date")
 body = to_num(body, ["weight", "body_fat", "fat_free_mass"])
 
 if not body.empty:
@@ -175,7 +193,7 @@ else:
     st.info("No data in the selected date range.")
 
 # ============================================================
-# Energy + Training (REAL)
+# Energy + Training
 # ============================================================
 st.header("⚡ Energy Balance + Training")
 
@@ -184,8 +202,8 @@ st.header("⚡ Energy Balance + Training")
 # ----------------------------
 energy = load_sheet(WS_ENERGY_WEEKLY)
 energy = normalise_date_col(energy, "date")
+energy = align_to_monday(energy, "date")
 
-# Your actual Weekly_Energy columns
 energy = to_num(energy, [
     "days_logged",
     "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
@@ -201,8 +219,8 @@ energy_view = filter_range(energy, start_date, end_date, "date")
 # ----------------------------
 train = load_sheet(WS_TRAIN_WEEKLY)
 train = normalise_date_col(train, "date")
+train = align_to_monday(train, "date")
 
-# Your actual Weekly_Training columns (note avg_RIR casing)
 train = to_num(train, [
     "sets_total", "volume_total", "workouts_completed",
     "avg_RIR", "muscle_groups_hit_count",
@@ -211,12 +229,6 @@ train = to_num(train, [
 
 train_view = filter_range(train, start_date, end_date, "date")
 
-st.caption(f"train rows loaded: {len(train)} | train rows in range: {len(train_view)}")
-if not train.empty:
-    st.write("train columns:", list(train.columns))
-    st.write(train.head(3))
-
-
 # ----------------------------
 # Join (weekly on "date")
 # ----------------------------
@@ -224,13 +236,9 @@ combined = body_view[["date", "weight", "body_fat", "fat_free_mass", "fat_mass",
 
 if not energy_view.empty:
     combined = combined.merge(energy_view, on="date", how="left")
-    st.caption(f"combined rows: {len(combined)} | non-null sets_total: {combined['sets_total'].notna().sum() if 'sets_total' in combined.columns else 'missing'}")
-
 
 if not train_view.empty:
     combined = combined.merge(train_view, on="date", how="left")
-    st.caption(f"combined rows: {len(combined)} | non-null sets_total: {combined['sets_total'].notna().sum() if 'sets_total' in combined.columns else 'missing'}")
-
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
@@ -244,43 +252,66 @@ if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
     combined["energy_balance"] = combined["avg_calories"] - combined["avg_expenditure"]
 
 # ----------------------------
+# Debug
+# ----------------------------
+if DEBUG:
+    st.subheader("Debug: loaded frames")
+    st.caption(f"energy rows loaded: {len(energy)} | energy rows in range: {len(energy_view)}")
+    if not energy.empty:
+        st.write("energy columns:", list(energy.columns))
+        st.write(energy.head(3))
+
+    st.caption(f"train rows loaded: {len(train)} | train rows in range: {len(train_view)}")
+    if not train.empty:
+        st.write("train columns:", list(train.columns))
+        st.write(train.head(3))
+
+    st.caption(f"combined rows: {len(combined)}")
+    if "sets_total" in combined.columns:
+        st.caption(f"combined non-null sets_total: {combined['sets_total'].notna().sum()}")
+
+# ----------------------------
 # Show combined table (optional)
 # ----------------------------
 with st.expander("Combined weekly table (filtered)", expanded=False):
     combined_table = date_for_table(combined)
 
-    # Optional rounding to keep it clean
-    for c in [
+    # Coerce likely numeric columns (safe)
+    numeric_cols = [
         "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
         "avg_protein_g", "avg_carbs_g", "avg_fat_g",
         "protein_adherence_avg", "energy_adherence_avg",
         "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps",
+        "days_logged",
         "sets_total", "volume_total", "workouts_completed", "avg_RIR",
         "muscle_groups_hit_count", "training_minutes_total", "avg_workout_minutes",
         "energy_balance", "weight_change", "lean_change", "fat_change"
-    ]:
+    ]
+    for c in numeric_cols:
         if c in combined_table.columns:
             combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce")
 
-    # round some common fields
-    if "protein_adherence_avg" in combined_table.columns:
-        combined_table["protein_adherence_avg"] = combined_table["protein_adherence_avg"].round(3)
-    if "energy_adherence_avg" in combined_table.columns:
-        combined_table["energy_adherence_avg"] = combined_table["energy_adherence_avg"].round(3)
+    # Light rounding for nicer display
+    for c in ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta", "energy_balance", "avg_steps",
+              "training_minutes_total", "avg_workout_minutes", "volume_total"]:
+        if c in combined_table.columns:
+            combined_table[c] = combined_table[c].round(0)
 
-    for c in combined_table.columns:
-        if c in ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta", "energy_balance", "avg_steps"]:
-            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(0)
-        if c in ["weight", "fat_free_mass", "fat_mass", "lean_mass", "weight_change", "lean_change", "fat_change",
-                 "avg_scale_weight_lb", "avg_trend_weight_lb"]:
-            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(2)
+    for c in ["weight", "fat_free_mass", "fat_mass", "lean_mass", "weight_change", "lean_change", "fat_change",
+              "avg_scale_weight_lb", "avg_trend_weight_lb"]:
+        if c in combined_table.columns:
+            combined_table[c] = combined_table[c].round(2)
+
+    for c in ["protein_adherence_avg", "energy_adherence_avg"]:
+        if c in combined_table.columns:
+            combined_table[c] = combined_table[c].round(3)
 
     st.dataframe(combined_table)
 
 # ----------------------------
 # Charts: Calories vs Expenditure
 # ----------------------------
-if not energy_view.empty and ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
+if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns) and combined["avg_calories"].notna().any():
     st.subheader("Calories vs Expenditure (weekly)")
     ce = combined[["date", "avg_calories", "avg_expenditure"]].copy()
     ce_m = ce.melt("date", var_name="metric", value_name="value").dropna()
@@ -294,6 +325,8 @@ if not energy_view.empty and ("avg_calories" in combined.columns) and ("avg_expe
     ).properties(height=300, padding={"left": 10, "right": 10, "top": 10, "bottom": 40})
 
     st.altair_chart(ce_chart, use_container_width=True)
+else:
+    st.info("No weekly energy data in the selected date range yet.")
 
 # ----------------------------
 # Chart: Energy balance (bar)
@@ -333,13 +366,18 @@ if "energy_balance" in combined.columns and combined["energy_balance"].notna().a
 # ----------------------------
 # Chart: Training vs Lean Mass
 # ----------------------------
-if not train_view.empty and ("volume_total" in combined.columns or "sets_total" in combined.columns):
+has_training_metric = (
+    ("volume_total" in combined.columns and combined["volume_total"].notna().any()) or
+    ("sets_total" in combined.columns and combined["sets_total"].notna().any())
+)
+
+if has_training_metric:
     st.subheader("Training load vs Lean Mass (weekly)")
 
-    metric = "volume_total" if "volume_total" in combined.columns and combined["volume_total"].notna().any() else "sets_total"
+    metric = "volume_total" if ("volume_total" in combined.columns and combined["volume_total"].notna().any()) else "sets_total"
 
     tl = combined[["date", "lean_mass", metric]].copy().dropna(subset=["lean_mass"])
-    tl_m = tl.melt("date", var_name="metric", value_name="value")
+    tl_m = tl.melt("date", var_name="metric", value_name="value").dropna()
 
     tl_chart = alt.Chart(tl_m).mark_line(interpolate="monotone").encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max]),
@@ -351,5 +389,4 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
-    st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
-
+    st.info("No training data in the selected date range yet.")
