@@ -211,6 +211,12 @@ train = to_num(train, [
 
 train_view = filter_range(train, start_date, end_date, "date")
 
+st.caption(f"train rows loaded: {len(train)} | train rows in range: {len(train_view)}")
+if not train.empty:
+    st.write("train columns:", list(train.columns))
+    st.write(train.head(3))
+
+
 # ----------------------------
 # Join (weekly on "date")
 # ----------------------------
@@ -218,9 +224,13 @@ combined = body_view[["date", "weight", "body_fat", "fat_free_mass", "fat_mass",
 
 if not energy_view.empty:
     combined = combined.merge(energy_view, on="date", how="left")
+    st.caption(f"combined rows: {len(combined)} | non-null sets_total: {combined['sets_total'].notna().sum() if 'sets_total' in combined.columns else 'missing'}")
+
 
 if not train_view.empty:
     combined = combined.merge(train_view, on="date", how="left")
+    st.caption(f"combined rows: {len(combined)} | non-null sets_total: {combined['sets_total'].notna().sum() if 'sets_total' in combined.columns else 'missing'}")
+
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
@@ -342,3 +352,4 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
+
