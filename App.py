@@ -64,6 +64,8 @@ body = load_sheet(WS_BODY_WEEKLY)
 body = body.rename(columns={"date_time": "date"}) if "date_time" in body.columns and "date" not in body.columns else body
 body = normalise_date_col(body, "date")
 body = to_num(body, ["weight", "body_fat", "fat_free_mass"])
+body["date"] = pd.to_datetime(body["date"], errors="coerce").dt.date
+
 
 if not body.empty:
     body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
@@ -293,6 +295,7 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
+
 
 
 
