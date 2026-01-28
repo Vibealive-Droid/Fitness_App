@@ -239,7 +239,7 @@ if not body_view.empty:
             alt.Tooltip("metric:N", title="Metric"),
             alt.Tooltip("value:Q", title="Lbs", format=".2f"),
         ],
-    ).properties(height=360, padding={"left": 10, "right": 10, "top": 10, "bottom": 40)
+    ).properties(height=360, padding={"left": 10, "right": 10, "top": 10, "bottom": 40))
 
     st.altair_chart(weight_chart, use_container_width=True)
 else:
@@ -675,3 +675,4 @@ note = st.text_input("Quick note (optional)", value="")
 if DEBUG:
     st.subheader("Debug: manual inputs")
     st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
