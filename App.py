@@ -292,7 +292,7 @@ if not body_view.empty:
         .properties(
             height=300,
             padding={"left": 10, "right": 1
-
+                    }
 
 # ============================================================
 # Energy + Training
@@ -703,6 +703,7 @@ note = st.text_input("Quick note (optional)", value="")
 if DEBUG:
     st.subheader("Debug: manual inputs")
     st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
 
 
 
