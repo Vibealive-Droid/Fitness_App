@@ -266,6 +266,7 @@ else:
 # Body Fat % (Altair)
 # ----------------------------
 st.subheader("Body Fat %")
+
 if not body_view.empty:
     bf_df = body_view[["date", "body_fat"]].copy()
 
@@ -289,12 +290,16 @@ if not body_view.empty:
                 alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
             ],
         )
-    .properties(
-        height=300,
-        padding={"left": 10, "right": 10, "top": 10, "bottom": 40},
+        .properties(
+            height=300,
+            padding={"left": 10, "right": 10, "top": 10, "bottom": 40},
         )
+    )
 
-                    
+    st.altair_chart(bf_chart, use_container_width=True)
+else:
+    st.info("No data in the selected date range.")
+          
 
 # ============================================================
 # Energy + Training
@@ -705,6 +710,7 @@ note = st.text_input("Quick note (optional)", value="")
 if DEBUG:
     st.subheader("Debug: manual inputs")
     st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
 
 
 
