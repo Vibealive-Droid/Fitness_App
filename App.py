@@ -108,6 +108,7 @@ if not body.empty:
 # ----------------------------
 # Date range selector (bulletproof)
 # ----------------------------
+# ---- date range selector (bulletproof + allows report Monday) ----
 st.subheader("Date range")
 
 if body.empty:
@@ -115,38 +116,43 @@ if body.empty:
     st.stop()
 
 min_date = body["date"].min().date()
-max_date = body["date"].max().date()
-default_start = max(min_date, (pd.Timestamp(max_date) - pd.DateOffset(months=12)).date())
+max_body_date = body["date"].max().date()
+
+default_start = max(min_date, (pd.Timestamp(max_body_date) - pd.DateOffset(months=12)).date())
 
 col1, col2, col3 = st.columns([1, 1, 2])
+
+with col3:
+    include_report_monday = st.checkbox(
+        "Include current week (report Monday)",
+        value=True,
+        help="Weekly Energy/Training rows are stamped on the next Monday. Enable to include that row in the filter + charts.",
+        key="include_report_monday",
+    )
+
+# Allow selecting past last body date when checkbox is on
+max_end_allowed = max_body_date
+if include_report_monday:
+    max_end_allowed = (pd.Timestamp(max_body_date) + pd.Timedelta(days=7)).date()
 
 with col1:
     start_date = st.date_input(
         "Start date",
         value=default_start,
         min_value=min_date,
-        max_value=max_date,
+        max_value=max_end_allowed,
         key="start_date",
     )
 
 with col2:
     end_date = st.date_input(
         "End date",
-        value=max_date,
+        value=max_body_date,
         min_value=min_date,
-        max_value=max_date,
+        max_value=max_end_allowed,
         key="end_date",
     )
 
-with col3:
-    include_report_monday = st.checkbox(
-        "Include current week (report Monday)",
-        value=True,
-        help="Weekly Energy/Training rows are stamped on the next Monday. This includes that row so you can see this week’s progress.",
-        key="include_report_monday",
-    )
-
-# Safety: handle weird states
 if start_date is None or end_date is None:
     st.warning("Please select both a start and end date.")
     st.stop()
@@ -155,15 +161,11 @@ if start_date > end_date:
     st.error("Start date must be before end date.")
     st.stop()
 
-# Optional: extend end_date by 7 days so the stamped weekly row appears
+# What we actually use to filter weekly tables
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
-
-if start_date > end_date:
-    st.error("Start date must be before end date.")
-    st.stop()
 
 body_view = filter_range(body, start_date, end_date_for_weekly, "date")
 x_min = body_view["date"].min()
@@ -269,24 +271,56 @@ train = to_num(train, [
 train_view = filter_range(train, start_date, end_date_for_weekly, "date")
 
 # ----------------------------
-# Join (weekly on "date")
+# Filter views (use end_date_for_weekly)
 # ----------------------------
-combined = body_view[["date", "weight", "body_fat", "fat_free_mass", "fat_mass", "lean_mass"]].copy()
+body_view = filter_range(body, start_date, end_date_for_weekly, "date")
+energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
+train_view = filter_range(train, start_date, end_date_for_weekly, "date")
 
+# X-axis bounds: use requested window, not just body availability
+x_min = pd.Timestamp(start_date)
+x_max = pd.Timestamp(end_date_for_weekly)
+
+# ----------------------------
+# Join using UNION of dates (so report-Monday rows show up)
+# ----------------------------
+date_series = []
+if not body_view.empty and "date" in body_view.columns:
+    date_series.append(body_view["date"])
+if not energy_view.empty and "date" in energy_view.columns:
+    date_series.append(energy_view["date"])
+if not train_view.empty and "date" in train_view.columns:
+    date_series.append(train_view["date"])
+
+if date_series:
+    all_dates = pd.Series(pd.concat(date_series).unique())
+    all_dates = pd.to_datetime(all_dates, errors="coerce").dropna().sort_values()
+    combined = pd.DataFrame({"date": all_dates})
+else:
+    combined = pd.DataFrame(columns=["date"])
+
+# Bring in body metrics (left join on full date index)
+if not body_view.empty:
+    body_cols = ["date", "weight", "body_fat", "fat_free_mass", "fat_mass", "lean_mass"]
+    combined = combined.merge(body_view[body_cols], on="date", how="left")
+
+# Bring in energy + training
 if not energy_view.empty:
     combined = combined.merge(energy_view, on="date", how="left")
-
 if not train_view.empty:
     combined = combined.merge(train_view, on="date", how="left")
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
-# Derived deltas
-combined["weight_change"] = combined["weight"].diff()
-combined["lean_change"] = combined["lean_mass"].diff()
-combined["fat_change"] = combined["fat_mass"].diff()
+# Derived deltas (only meaningful when body exists)
+if "weight" in combined.columns:
+    combined["weight_change"] = combined["weight"].diff()
+if "lean_mass" in combined.columns:
+    combined["lean_change"] = combined["lean_mass"].diff()
+if "fat_mass" in combined.columns:
+    combined["fat_change"] = combined["fat_mass"].diff()
 
-# Energy balance (weekly avg kcal/day)
+# Energy balance
 if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
     combined["energy_balance"] = combined["avg_calories"] - combined["avg_expenditure"]
 
@@ -429,4 +463,5 @@ if has_training_metric:
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("No training data in the selected date range yet.")
+
 
