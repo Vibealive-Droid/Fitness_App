@@ -98,7 +98,7 @@ x_min = body_view["date"].min()
 x_max = body_view["date"].max()
 
 # Date Corrector
-for df in (body, energy_view, combined):
+for df in (body, combined):
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"]).dt.date
 
@@ -298,5 +298,6 @@ if not train_view.empty and ("volume_total" in combined.columns or "sets_total" 
     st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.info("Training or energy tabs are empty or missing expected columns. Once populated, charts will appear automatically.")
+
 
 
