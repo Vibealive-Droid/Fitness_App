@@ -92,7 +92,7 @@ def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
 
-DEBUG = st.sidebar.checkbox("Debug", value=False)
+
 
 # ----------------------------
 # Load BODY weekly
@@ -360,17 +360,6 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     vol = safe_num(combined["volume_total"])
     combined["volume_per_minute"] = vol / minutes
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
-
-# ----------------------------
-# Debug
-# ----------------------------
-if DEBUG:
-    st.subheader("Debug: loaded frames")
-    st.caption(f"Body rows in range: {len(body_view)} | Energy rows in range: {len(energy_view)} | Training rows in range: {len(train_view)}")
-    st.write("Weekly_Training columns:", list(train.columns) if not train.empty else [])
-    st.write("Weekly_Energy columns:", list(energy.columns) if not energy.empty else [])
-    if "sets_total" in combined.columns:
-        st.caption(f"combined non-null sets_total: {combined['sets_total'].notna().sum()}")
 
 # ----------------------------
 # This week so far (Daily_Energy + Staging_Workout_Log)
@@ -803,9 +792,7 @@ sleep_hours = st.number_input("Sleep hours (today)", min_value=0.0, max_value=24
 mood = st.selectbox("Mood (optional)", ["", "Great", "Good", "OK", "Low", "Rough"])
 note = st.text_input("Quick note (optional)", value="")
 
-if DEBUG:
-    st.subheader("Debug: manual inputs")
-    st.write({"sleep_hours": sleep_hours, "mood": mood, "note": note})
+
 
 
 
