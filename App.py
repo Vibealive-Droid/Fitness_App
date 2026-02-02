@@ -776,10 +776,15 @@ if train_metric is not None:
         y_title = title_map.get(train_metric, train_metric)
 
         train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y(f"{train_metric}:Q", title=y_title),
-            tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
-        ).properties(height=240)
+    x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+    y=alt.Y(
+        f"{train_metric}:Q",
+        title=y_title,
+        scale=alt.Scale(domain=[70000, 90000])  # ✅ set training scale here
+    ),
+    tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
+).properties(height=240)
+
 
         st.altair_chart(train_chart, use_container_width=True)
         st.caption(f"Training metric shown: {train_metric}")
