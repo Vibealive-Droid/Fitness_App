@@ -108,58 +108,35 @@ def monday_of(d: pd.Timestamp) -> pd.Timestamp:
 def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
     return monday_of(d) + pd.Timedelta(days=6)
 
+# Optional: schema normalizers (safe no-ops if headers already correct)
 def normalise_daily_energy_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Daily_Energy columns from Apps Script schema to the names the app expects."""
+    """Rename Daily_Energy columns from older Apps Script schema to the names the app expects."""
     if df.empty:
         return df
-
     df = df.copy()
-
-    # common renames (Apps Script -> Streamlit expected)
     rename_map = {
         "logged": "days_logged_flag",
-        "Logged": "days_logged_flag",
-
         "calTarget": "calorie_target",
-        "avg_calorie_target": "calorie_target",
-        "Target Calories (kcal)": "calorie_target",
-
         "protein": "protein_g",
         "carbs": "carbs_g",
         "fat": "fat_g",
-
         "proteinAdh": "protein_adherence",
         "energyAdh": "energy_adherence",
-
         "trendW": "trend_weight_lb",
-        "Trend Weight (lbs)": "trend_weight_lb",
-        "Weight (lbs)": "weight_lb",
     }
-
-    # apply only keys that exist
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-
     return df
 
-
 def normalise_workout_log_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Staging_Workout_Log columns from Apps Script schema to names used in app calculations."""
+    """Rename Workout Log columns from older schema to the names used in app calculations."""
     if df.empty:
         return df
-
     df = df.copy()
-
     rename_map = {
         "weight": "weight_lb",
-        "Weight (lbs)": "weight_lb",
-        "reps": "reps",
-        "Reps": "reps",
-        "workout_duration": "workout_duration",
         "Workout Duration": "workout_duration",
-        "set_type": "set_type",
         "Set Type": "set_type",
     }
-
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     return df
 
@@ -217,12 +194,7 @@ with colA:
         "Year-to-date",
         "Custom",
     ]
-    preset = st.selectbox(
-        "Quick range",
-        preset_options,
-        index=0,
-        key="preset_range",
-    )
+    preset = st.selectbox("Quick range", preset_options, index=0, key="preset_range")
 
 def compute_preset(preset_name: str):
     if preset_name == "Last week (Mon–Sun)":
@@ -497,20 +469,32 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined["volume_per_minute"] = vol / minutes
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
+
 # ----------------------------
-# This week so far
+# This week so far (ALWAYS current week) + Debug (last week)
 # ----------------------------
 st.subheader("This week so far")
 
-today = pd.Timestamp.today().normalize()
-week_start_dt = today - pd.to_timedelta(today.weekday(), unit="D")  # Monday
-week_start = week_start_dt.date()
-week_end = today.date()
+today_ts = pd.Timestamp.today().normalize()
+this_week_start_dt = today_ts - pd.to_timedelta(today_ts.weekday(), unit="D")  # Monday
+this_week_end_dt = today_ts  # today (so far)
 
+week_start = this_week_start_dt.date()
+week_end = this_week_end_dt.date()
+
+st.caption(f"Current week window: {week_start} → {week_end}")
+
+# Debug window (last week Mon–Sun)
+last_week_start_dt = this_week_start_dt - pd.Timedelta(days=7)
+last_week_end_dt = this_week_start_dt - pd.Timedelta(days=1)
+
+with st.expander("🛠 Debug: inspect last week data", expanded=False):
+    debug_last_week = st.checkbox("Show last week's raw data (debug only)", value=False)
+
+# Load Daily_Energy + Workout Log (once)
 daily_energy = load_sheet(WS_DAILY_ENERGY)
 daily_energy = normalise_daily_energy_schema(daily_energy)
 daily_energy = normalise_date_col(daily_energy, "date")
-
 daily_energy = to_num(daily_energy, [
     "days_logged_flag", "calories", "expenditure", "calorie_target",
     "protein_g", "carbs_g", "fat_g",
@@ -518,14 +502,29 @@ daily_energy = to_num(daily_energy, [
     "steps"
 ])
 
-daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
-
 workout_log = load_sheet(WS_WORKOUT_LOG)
 workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
-
 workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
+
+# Filter to CURRENT week (production)
+daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
 workout_week = filter_range(workout_log, week_start, week_end, "date")
+
+# Debug: show LAST week tables (optional)
+if debug_last_week:
+    dbg_start = last_week_start_dt.date()
+    dbg_end = last_week_end_dt.date()
+    st.caption(f"Debug (last week Mon–Sun): {dbg_start} → {dbg_end}")
+
+    dbg_daily = filter_range(daily_energy, dbg_start, dbg_end, "date")
+    dbg_workouts = filter_range(workout_log, dbg_start, dbg_end, "date")
+
+    st.markdown("**Daily_Energy (last week)**")
+    st.dataframe(date_for_table(dbg_daily), hide_index=True)
+
+    st.markdown("**Staging_Workout_Log (last week)**")
+    st.dataframe(date_for_table(dbg_workouts), hide_index=True)
 
 
 c1, c2, c3, c4 = st.columns(4)
@@ -553,8 +552,8 @@ if not daily_energy_week.empty and "calories" in daily_energy_week.columns:
         st.metric("Avg balance", f"{avg_bal:.0f}" if pd.notna(avg_bal) else "—")
         st.metric("Avg steps", f"{avg_steps:.0f}" if pd.notna(avg_steps) else "—")
     with c4:
-        st.metric("Protein adherence", f"{avg_p_adh:.3f}" if pd.notna(avg_p_adh) else "—")
-        st.metric("Energy adherence", f"{avg_e_adh:.3f}" if pd.notna(avg_e_adh) else "—")
+        st.metric("Protein adherence", f"{avg_p_adh*100:.0f}%" if pd.notna(avg_p_adh) else "—")
+        st.metric("Energy adherence", f"{avg_e_adh*100:.0f}%" if pd.notna(avg_e_adh) else "—")
 else:
     with c1:
         st.metric("Days logged", "—")
@@ -628,7 +627,7 @@ with st.expander("Combined weekly table (filtered)", expanded=False):
 # Charts
 # ============================================================
 
-# A) Calories vs Expenditure (line + dots so 1-week doesn't look blank)
+# A) Calories vs Expenditure (line + dots so 1-week doesn't look blank) + fixed y-scale
 st.subheader("Calories vs Expenditure (weekly)")
 
 if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
@@ -643,21 +642,19 @@ if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.colum
         st.caption("No weekly energy data in the selected date range yet.")
     else:
         base = alt.Chart(ce_m).encode(
-    x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-    y=alt.Y(
-        "value:Q",
-        title="kcal",
-        scale=alt.Scale(domain=[1000, 5000], clamp=True)
-    ),
-    color=alt.Color("metric:N", title=""),
-    tooltip=[
-        alt.Tooltip("date:T", title="Week"),
-        alt.Tooltip("metric:N"),
-        alt.Tooltip("value:Q", format=".0f"),
-    ],
-)
-
-
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y(
+                "value:Q",
+                title="kcal",
+                scale=alt.Scale(domain=[1000, 5000], clamp=True)
+            ),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[
+                alt.Tooltip("date:T", title="Week"),
+                alt.Tooltip("metric:N"),
+                alt.Tooltip("value:Q", format=".0f"),
+            ],
+        )
         ce_chart = (base.mark_line(interpolate="monotone") + base.mark_circle(size=90)).properties(height=300)
         st.altair_chart(ce_chart, use_container_width=True)
 else:
@@ -726,7 +723,6 @@ if has_adh:
 
     adh_m = adh.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
-    # Convert ratio -> percent for chart display
     if not adh_m.empty:
         adh_m = adh_m.copy()
         adh_m["value_pct"] = adh_m["value"] * 100
@@ -736,7 +732,7 @@ if has_adh:
             y=alt.Y(
                 "value_pct:Q",
                 title="Adherence (%)",
-                scale=alt.Scale(domain=[50, 130], clamp=True)  # adjust if you want wider/narrower
+                scale=alt.Scale(domain=[50, 130], clamp=True)
             ),
             color=alt.Color("metric:N", title=""),
             tooltip=[
@@ -748,7 +744,6 @@ if has_adh:
 
         st.altair_chart(adh_chart, use_container_width=True)
 
-    # Keep threshold logic in ratio space (0.9 = 90%)
     p_ok = (combined["protein_adherence_avg"] >= 0.9).mean() if "protein_adherence_avg" in combined.columns else pd.NA
     e_ok = (combined["energy_adherence_avg"] >= 0.9).mean() if "energy_adherence_avg" in combined.columns else pd.NA
 
@@ -759,7 +754,6 @@ if has_adh:
         st.metric("% weeks energy ≥ 90%", f"{e_ok*100:.0f}%" if pd.notna(e_ok) else "—")
 else:
     st.caption("No adherence data yet.")
-
 
 # E) Lean vs Fat change decomposition
 st.subheader("Lean vs Fat change (weekly)")
@@ -814,10 +808,9 @@ if has_eff:
 else:
     st.caption("No training minutes yet.")
 
-# G) Training load + Lean mass (STACKED CHARTS — Option 02)
+# G) Training load and Lean Mass (STACKED CHARTS — Option 02) with fixed scales
 st.subheader("Training load and Lean Mass (weekly)")
 
-# Choose training metric to show (prefer volume_total, else sets_total, else minutes)
 train_metric = None
 for candidate in ["volume_total", "sets_total", "training_minutes_total"]:
     if candidate in combined.columns and safe_num(combined[candidate]).notna().any():
@@ -826,7 +819,6 @@ for candidate in ["volume_total", "sets_total", "training_minutes_total"]:
 
 lm = combined[["date"]].copy()
 lm["date"] = pd.to_datetime(lm["date"], errors="coerce")
-
 if "lean_mass" in combined.columns:
     lm["lean_mass"] = pd.to_numeric(combined["lean_mass"], errors="coerce")
 
@@ -835,25 +827,17 @@ tr["date"] = pd.to_datetime(tr["date"], errors="coerce")
 if train_metric is not None:
     tr[train_metric] = pd.to_numeric(combined[train_metric], errors="coerce")
 
-# Lean mass chart
 lm_plot = lm.dropna(subset=["date", "lean_mass"]) if "lean_mass" in lm.columns else pd.DataFrame()
 if not lm_plot.empty:
     lean_chart = alt.Chart(lm_plot).mark_line(interpolate="monotone", point=True).encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y(
-    "lean_mass:Q",
-    title="Lean mass (lbs)",
-    scale=alt.Scale(domain=[150, 220])
-),
-
+        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)", scale=alt.Scale(domain=[150, 220])),
         tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip("lean_mass:Q", format=".2f")]
     ).properties(height=240)
-
     st.altair_chart(lean_chart, use_container_width=True)
 else:
     st.caption("No lean mass data yet (or none in the selected range).")
 
-# Training chart
 if train_metric is not None:
     tr_plot = tr.dropna(subset=["date", train_metric])
     if not tr_plot.empty:
@@ -864,16 +848,14 @@ if train_metric is not None:
         }
         y_title = title_map.get(train_metric, train_metric)
 
-        train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
-    x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-    y=alt.Y(
-        f"{train_metric}:Q",
-        title=y_title,
-        scale=alt.Scale(domain=[70000, 90000])  # ✅ set training scale here
-    ),
-    tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
-).properties(height=240)
+        # Only force 70k–90k scale for volume_total (otherwise it would look flat)
+        y_scale = alt.Scale(domain=[70000, 90000]) if train_metric == "volume_total" else alt.Undefined
 
+        train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y(f"{train_metric}:Q", title=y_title, scale=y_scale),
+            tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
+        ).properties(height=240)
 
         st.altair_chart(train_chart, use_container_width=True)
         st.caption(f"Training metric shown: {train_metric}")
