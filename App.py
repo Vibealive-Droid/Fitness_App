@@ -674,7 +674,7 @@ if has_adh:
             y=alt.Y(
                 "value_pct:Q",
                 title="Adherence (%)",
-                scale=alt.Scale(domain=[80, 120], clamp=True)  # adjust if you want wider/narrower
+                scale=alt.Scale(domain=[50, 130], clamp=True)  # adjust if you want wider/narrower
             ),
             color=alt.Color("metric:N", title=""),
             tooltip=[
