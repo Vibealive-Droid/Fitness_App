@@ -751,7 +751,12 @@ lm_plot = lm.dropna(subset=["date", "lean_mass"]) if "lean_mass" in lm.columns e
 if not lm_plot.empty:
     lean_chart = alt.Chart(lm_plot).mark_line(interpolate="monotone", point=True).encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)"),
+        y=alt.Y(
+    "lean_mass:Q",
+    title="Lean mass (lbs)",
+    scale=alt.Scale(domain=[150, 220])
+),
+
         tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip("lean_mass:Q", format=".2f")]
     ).properties(height=240)
 
