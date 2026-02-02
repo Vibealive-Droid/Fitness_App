@@ -323,15 +323,21 @@ x_max = pd.Timestamp(end_date_for_weekly)
 # ----------------------------
 st.subheader("Weekly Body Comp (filtered)")
 body_table = date_for_table(body_view)
-st.dataframe(
-    body_table.style.format({
-        "weight": "{:.2f}",
-        "body_fat": "{:.2f}",
-        "fat_free_mass": "{:.2f}",
-        "fat_mass": "{:.2f}",
-        "lean_mass": "{:.2f}",
-    }) if not body_table.empty else body_table
-)
+
+if body_table.empty:
+    st.dataframe(body_table, hide_index=True)
+else:
+    st.dataframe(
+        body_table.style.format({
+            "weight": "{:.2f}",
+            "body_fat": "{:.2f}",
+            "fat_free_mass": "{:.2f}",
+            "fat_mass": "{:.2f}",
+            "lean_mass": "{:.2f}",
+        }),
+        hide_index=True
+    )
+
 
 # ----------------------------
 # Weight Trend (Altair)
@@ -579,7 +585,7 @@ with st.expander("Combined weekly table (filtered)", expanded=False):
         if c in combined_table.columns:
             combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(3)
 
-    st.dataframe(combined_table)
+    st.dataframe(combined_table, hide_index=True)
 
 # ============================================================
 # Charts
