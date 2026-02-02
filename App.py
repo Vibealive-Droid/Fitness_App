@@ -581,15 +581,21 @@ if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.colum
         st.caption("No weekly energy data in the selected date range yet.")
     else:
         base = alt.Chart(ce_m).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="kcal"),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[
-                alt.Tooltip("date:T", title="Week"),
-                alt.Tooltip("metric:N"),
-                alt.Tooltip("value:Q", format=".0f"),
-            ],
-        )
+    x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+    y=alt.Y(
+        "value:Q",
+        title="kcal",
+        scale=alt.Scale(domain=[1000, 5000], clamp=True)
+    ),
+    color=alt.Color("metric:N", title=""),
+    tooltip=[
+        alt.Tooltip("date:T", title="Week"),
+        alt.Tooltip("metric:N"),
+        alt.Tooltip("value:Q", format=".0f"),
+    ],
+)
+
+
         ce_chart = (base.mark_line(interpolate="monotone") + base.mark_circle(size=90)).properties(height=300)
         st.altair_chart(ce_chart, use_container_width=True)
 else:
