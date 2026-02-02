@@ -108,6 +108,62 @@ def monday_of(d: pd.Timestamp) -> pd.Timestamp:
 def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
     return monday_of(d) + pd.Timedelta(days=6)
 
+def normalise_daily_energy_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename Daily_Energy columns from Apps Script schema to the names the app expects."""
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    # common renames (Apps Script -> Streamlit expected)
+    rename_map = {
+        "logged": "days_logged_flag",
+        "Logged": "days_logged_flag",
+
+        "calTarget": "calorie_target",
+        "avg_calorie_target": "calorie_target",
+        "Target Calories (kcal)": "calorie_target",
+
+        "protein": "protein_g",
+        "carbs": "carbs_g",
+        "fat": "fat_g",
+
+        "proteinAdh": "protein_adherence",
+        "energyAdh": "energy_adherence",
+
+        "trendW": "trend_weight_lb",
+        "Trend Weight (lbs)": "trend_weight_lb",
+        "Weight (lbs)": "weight_lb",
+    }
+
+    # apply only keys that exist
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+    return df
+
+
+def normalise_workout_log_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename Staging_Workout_Log columns from Apps Script schema to names used in app calculations."""
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    rename_map = {
+        "weight": "weight_lb",
+        "Weight (lbs)": "weight_lb",
+        "reps": "reps",
+        "Reps": "reps",
+        "workout_duration": "workout_duration",
+        "Workout Duration": "workout_duration",
+        "set_type": "set_type",
+        "Set Type": "set_type",
+    }
+
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    return df
+
+
 # ----------------------------
 # Load BODY weekly
 # ----------------------------
@@ -452,19 +508,25 @@ week_start = week_start_dt.date()
 week_end = today.date()
 
 daily_energy = load_sheet(WS_DAILY_ENERGY)
+daily_energy = normalise_daily_energy_schema(daily_energy)
 daily_energy = normalise_date_col(daily_energy, "date")
+
 daily_energy = to_num(daily_energy, [
     "days_logged_flag", "calories", "expenditure", "calorie_target",
     "protein_g", "carbs_g", "fat_g",
     "protein_adherence", "energy_adherence",
     "steps"
 ])
+
 daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
 
 workout_log = load_sheet(WS_WORKOUT_LOG)
+workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
+
 workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
 workout_week = filter_range(workout_log, week_start, week_end, "date")
+
 
 c1, c2, c3, c4 = st.columns(4)
 
