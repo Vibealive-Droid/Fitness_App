@@ -584,43 +584,50 @@ workout_week = filter_range(workout_log, week_start, week_end, "date")
 
 c1, c2, c3, c4 = st.columns(4)
 
-# Energy so far this week
-if not daily_energy_week_logged.empty:
-    logged = daily_energy_week_logged.copy()
+# Energy so far this week (split: nutrition-logged vs activity)
+de = daily_energy_week.copy()
 
-    days_logged = int(len(logged))
-    avg_cals = logged["calories"].mean() if "calories" in logged.columns else pd.NA
-    avg_exp = logged["expenditure"].mean() if "expenditure" in logged.columns else pd.NA
-    avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
-    avg_steps = logged["steps"].mean() if "steps" in logged.columns else pd.NA
+# --- Nutrition-logged days (calories/macros) ---
+nutrition = pick_logged_days(de)  # uses days_logged_flag OR calories/macros > 0
 
-    avg_p_adh = logged["protein_adherence"].mean() if "protein_adherence" in logged.columns else pd.NA
-    avg_e_adh = logged["energy_adherence"].mean() if "energy_adherence" in logged.columns else pd.NA
+# --- Activity days (expenditure/steps) ---
+activity = de.copy()
+activity["expenditure"] = pd.to_numeric(activity.get("expenditure"), errors="coerce")
+activity["steps"] = pd.to_numeric(activity.get("steps"), errors="coerce")
+activity = activity.dropna(subset=["date"])
+activity_days = activity[
+    (activity["expenditure"].fillna(0) > 0) | (activity["steps"].fillna(0) > 0)
+].copy()
 
-    with c1:
-        st.metric("Days logged", days_logged)
-    with c2:
-        st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
-        st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
-    with c3:
-        st.metric("Avg balance", metric_or_dash(avg_bal, "{:.0f}"))
-        st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
-    with c4:
-        # adherence from Daily_Energy is typically ratio (e.g., 0.92). Show as percent if present.
-        st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
-        st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
-else:
-    with c1:
-        st.metric("Days logged", "—")
-    with c2:
-        st.metric("Avg calories", "—")
-        st.metric("Avg expenditure", "—")
-    with c3:
-        st.metric("Avg balance", "—")
-        st.metric("Avg steps", "—")
-    with c4:
-        st.metric("Protein adherence", "—")
-        st.metric("Energy adherence", "—")
+# Metrics
+days_logged = int(len(nutrition)) if not nutrition.empty else 0
+
+avg_cals = nutrition["calories"].mean() if (not nutrition.empty and "calories" in nutrition.columns) else pd.NA
+avg_exp = activity_days["expenditure"].mean() if (not activity_days.empty and "expenditure" in activity_days.columns) else pd.NA
+avg_steps = activity_days["steps"].mean() if (not activity_days.empty and "steps" in activity_days.columns) else pd.NA
+avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
+
+avg_p_adh = nutrition["protein_adherence"].mean() if (not nutrition.empty and "protein_adherence" in nutrition.columns) else pd.NA
+avg_e_adh = nutrition["energy_adherence"].mean() if (not nutrition.empty and "energy_adherence" in nutrition.columns) else pd.NA
+
+with c1:
+    st.metric("Days logged (nutrition)", days_logged)
+
+with c2:
+    st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
+    st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
+
+with c3:
+    st.metric("Avg balance", metric_or_dash(avg_bal, "{:.0f}"))
+    st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
+
+with c4:
+    st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
+    st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
+
+# Friendly message if calories/macros weren’t logged but activity exists
+if nutrition.empty and not activity_days.empty:
+    st.info("No nutrition was logged this week yet (calories/macros are 0), but activity data (expenditure/steps) is available.")
 
 # Training so far this week (unique sessions)
 if not workout_week.empty and ("workout_duration" in workout_week.columns) and ("workout" in workout_week.columns):
