@@ -584,31 +584,35 @@ workout_week = filter_range(workout_log, week_start, week_end, "date")
 
 c1, c2, c3, c4 = st.columns(4)
 
-# Energy so far this week (split: nutrition-logged vs activity)
+# Energy so far this week (split: nutrition vs activity)
 de = daily_energy_week.copy()
 
-# --- Nutrition-logged days (calories/macros) ---
-nutrition = pick_logged_days(de)  # uses days_logged_flag OR calories/macros > 0
+# Nutrition-logged days (for calories + adherence)
+nutrition = pick_logged_days(de)
 
-# --- Activity days (expenditure/steps) ---
+# Activity days (for expenditure + steps)
 activity = de.copy()
-activity["expenditure"] = pd.to_numeric(activity.get("expenditure"), errors="coerce")
-activity["steps"] = pd.to_numeric(activity.get("steps"), errors="coerce")
+if "expenditure" in activity.columns:
+    activity["expenditure"] = pd.to_numeric(activity["expenditure"], errors="coerce")
+if "steps" in activity.columns:
+    activity["steps"] = pd.to_numeric(activity["steps"], errors="coerce")
+
 activity = activity.dropna(subset=["date"])
-activity_days = activity[
-    (activity["expenditure"].fillna(0) > 0) | (activity["steps"].fillna(0) > 0)
+activity = activity[
+    (activity.get("expenditure", 0).fillna(0) > 0) | (activity.get("steps", 0).fillna(0) > 0)
 ].copy()
 
-# Metrics
+# --- Metrics ---
 days_logged = int(len(nutrition)) if not nutrition.empty else 0
 
 avg_cals = nutrition["calories"].mean() if (not nutrition.empty and "calories" in nutrition.columns) else pd.NA
-avg_exp = activity_days["expenditure"].mean() if (not activity_days.empty and "expenditure" in activity_days.columns) else pd.NA
-avg_steps = activity_days["steps"].mean() if (not activity_days.empty and "steps" in activity_days.columns) else pd.NA
-avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
-
 avg_p_adh = nutrition["protein_adherence"].mean() if (not nutrition.empty and "protein_adherence" in nutrition.columns) else pd.NA
 avg_e_adh = nutrition["energy_adherence"].mean() if (not nutrition.empty and "energy_adherence" in nutrition.columns) else pd.NA
+
+avg_exp = activity["expenditure"].mean() if (not activity.empty and "expenditure" in activity.columns) else pd.NA
+avg_steps = activity["steps"].mean() if (not activity.empty and "steps" in activity.columns) else pd.NA
+
+avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
 
 with c1:
     st.metric("Days logged (nutrition)", days_logged)
@@ -624,6 +628,9 @@ with c3:
 with c4:
     st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
     st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
+
+if nutrition.empty and not activity.empty:
+    st.info("No nutrition logged yet this week (calories/macros are blank), but activity data (expenditure/steps) is available.")
 
 # Friendly message if calories/macros weren’t logged but activity exists
 if nutrition.empty and not activity_days.empty:
