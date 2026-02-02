@@ -566,7 +566,7 @@ with st.expander("Combined weekly table (filtered)", expanded=False):
 # Charts
 # ============================================================
 
-# A) Calories vs Expenditure (FIXED: line + points so 1-week doesn’t look blank)
+# A) Calories vs Expenditure (line + dots so 1-week doesn't look blank)
 st.subheader("Calories vs Expenditure (weekly)")
 
 if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
@@ -617,25 +617,26 @@ if "energy_balance" in combined.columns and safe_num(combined["energy_balance"])
         st.altair_chart(eb_chart, use_container_width=True)
 
 # C) Weight change vs energy balance
-if ("energy_balance" in combined.columns) and ("weight_change" in combined.columns):
-    sc = combined[["date", "energy_balance", "weight_change"]].copy()
-    sc["date"] = pd.to_datetime(sc["date"], errors="coerce")
-    sc["energy_balance"] = pd.to_numeric(sc["energy_balance"], errors="coerce")
-    sc["weight_change"] = pd.to_numeric(sc["weight_change"], errors="coerce")
-    sc = sc.dropna(subset=["date", "energy_balance", "weight_change"])
+sc = combined[["date"]].copy()
+if "energy_balance" in combined.columns:
+    sc["energy_balance"] = pd.to_numeric(combined["energy_balance"], errors="coerce")
+if "weight_change" in combined.columns:
+    sc["weight_change"] = pd.to_numeric(combined["weight_change"], errors="coerce")
+sc["date"] = pd.to_datetime(combined["date"], errors="coerce")
+sc = sc.dropna(subset=["date", "energy_balance", "weight_change"]) if {"energy_balance", "weight_change"}.issubset(sc.columns) else pd.DataFrame()
 
-    if not sc.empty:
-        st.subheader("Weight change vs energy balance (weekly)")
-        scatter = alt.Chart(sc).mark_circle(size=90).encode(
-            x=alt.X("energy_balance:Q", title="Energy balance (kcal/day avg)"),
-            y=alt.Y("weight_change:Q", title="Weekly weight change (lbs)"),
-            tooltip=[
-                alt.Tooltip("date:T", title="Week"),
-                alt.Tooltip("energy_balance:Q", format=".0f"),
-                alt.Tooltip("weight_change:Q", format=".2f"),
-            ]
-        ).properties(height=300)
-        st.altair_chart(scatter, use_container_width=True)
+if not sc.empty:
+    st.subheader("Weight change vs energy balance (weekly)")
+    scatter = alt.Chart(sc).mark_circle(size=90).encode(
+        x=alt.X("energy_balance:Q", title="Energy balance (kcal/day avg)"),
+        y=alt.Y("weight_change:Q", title="Weekly weight change (lbs)"),
+        tooltip=[
+            alt.Tooltip("date:T", title="Week"),
+            alt.Tooltip("energy_balance:Q", format=".0f"),
+            alt.Tooltip("weight_change:Q", format=".2f"),
+        ]
+    ).properties(height=300)
+    st.altair_chart(scatter, use_container_width=True)
 
 # D) Adherence dashboard
 st.subheader("Adherence (weekly)")
@@ -671,16 +672,17 @@ if has_adh:
 else:
     st.caption("No adherence data yet.")
 
-# E) Lean vs Fat change
+# E) Lean vs Fat change decomposition
 st.subheader("Lean vs Fat change (weekly)")
-if ("lean_change" in combined.columns) or ("fat_change" in combined.columns):
-    lf = combined[["date", "lean_change", "fat_change"]].copy()
-    lf["date"] = pd.to_datetime(lf["date"], errors="coerce")
-    for c in ["lean_change", "fat_change"]:
-        if c in lf.columns:
-            lf[c] = pd.to_numeric(lf[c], errors="coerce")
-    lf_m = lf.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
+lf = combined[["date"]].copy()
+lf["date"] = pd.to_datetime(lf["date"], errors="coerce")
+if "lean_change" in combined.columns:
+    lf["lean_change"] = pd.to_numeric(combined["lean_change"], errors="coerce")
+if "fat_change" in combined.columns:
+    lf["fat_change"] = pd.to_numeric(combined["fat_change"], errors="coerce")
 
+if {"lean_change", "fat_change"}.issubset(lf.columns):
+    lf_m = lf.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
     if not lf_m.empty:
         lf_chart = alt.Chart(lf_m).mark_bar().encode(
             x=alt.X("date:T", title="Week", scale=alt.Scale(domain=[x_min, x_max])),
@@ -709,6 +711,7 @@ if has_eff:
     for c in te_cols:
         if c != "date":
             te[c] = pd.to_numeric(te[c], errors="coerce")
+
     te_m = te.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
     if not te_m.empty:
@@ -722,30 +725,63 @@ if has_eff:
 else:
     st.caption("No training minutes yet.")
 
-# G) Training vs Lean Mass
-st.subheader("Training load vs Lean Mass (weekly)")
-has_training_metric = (
-    ("volume_total" in combined.columns and safe_num(combined["volume_total"]).notna().any()) or
-    ("sets_total" in combined.columns and safe_num(combined["sets_total"]).notna().any())
-)
-if has_training_metric and ("lean_mass" in combined.columns):
-    metric = "volume_total" if ("volume_total" in combined.columns and safe_num(combined["volume_total"]).notna().any()) else "sets_total"
-    tl = combined[["date", "lean_mass", metric]].copy()
-    tl["date"] = pd.to_datetime(tl["date"], errors="coerce")
-    tl["lean_mass"] = pd.to_numeric(tl["lean_mass"], errors="coerce")
-    tl[metric] = pd.to_numeric(tl[metric], errors="coerce")
-    tl_m = tl.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
+# G) Training load + Lean mass (STACKED CHARTS — Option 02)
+st.subheader("Training load and Lean Mass (weekly)")
 
-    if not tl_m.empty:
-        tl_chart = alt.Chart(tl_m).mark_line(interpolate="monotone", point=True).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-        ).properties(height=300)
-        st.altair_chart(tl_chart, use_container_width=True)
+# Choose training metric to show (prefer volume_total, else sets_total, else minutes)
+train_metric = None
+for candidate in ["volume_total", "sets_total", "training_minutes_total"]:
+    if candidate in combined.columns and safe_num(combined[candidate]).notna().any():
+        train_metric = candidate
+        break
+
+lm = combined[["date"]].copy()
+lm["date"] = pd.to_datetime(lm["date"], errors="coerce")
+
+if "lean_mass" in combined.columns:
+    lm["lean_mass"] = pd.to_numeric(combined["lean_mass"], errors="coerce")
+
+tr = combined[["date"]].copy()
+tr["date"] = pd.to_datetime(tr["date"], errors="coerce")
+if train_metric is not None:
+    tr[train_metric] = pd.to_numeric(combined[train_metric], errors="coerce")
+
+# Lean mass chart
+lm_plot = lm.dropna(subset=["date", "lean_mass"]) if "lean_mass" in lm.columns else pd.DataFrame()
+if not lm_plot.empty:
+    lean_chart = alt.Chart(lm_plot).mark_line(interpolate="monotone", point=True).encode(
+        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)"),
+        tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip("lean_mass:Q", format=".2f")]
+    ).properties(height=240)
+
+    st.altair_chart(lean_chart, use_container_width=True)
 else:
-    st.caption("No training data in the selected date range yet.")
+    st.caption("No lean mass data yet (or none in the selected range).")
+
+# Training chart
+if train_metric is not None:
+    tr_plot = tr.dropna(subset=["date", train_metric])
+    if not tr_plot.empty:
+        title_map = {
+            "volume_total": "Training volume (lbs·reps)",
+            "sets_total": "Total sets",
+            "training_minutes_total": "Training minutes",
+        }
+        y_title = title_map.get(train_metric, train_metric)
+
+        train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y(f"{train_metric}:Q", title=y_title),
+            tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
+        ).properties(height=240)
+
+        st.altair_chart(train_chart, use_container_width=True)
+        st.caption(f"Training metric shown: {train_metric}")
+    else:
+        st.caption("No training data in the selected range yet.")
+else:
+    st.caption("No training metric available yet (volume_total / sets_total / training_minutes_total).")
 
 # ============================================================
 # Food patterns
