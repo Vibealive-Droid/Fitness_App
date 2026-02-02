@@ -628,10 +628,6 @@ with c3:
 with c4:
     st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
     st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
-
-if nutrition.empty and not activity.empty:
-    st.info("No nutrition logged yet this week (calories/macros are blank), but activity data (expenditure/steps) is available.")
-
 # Friendly message if calories/macros weren’t logged but activity exists
 if nutrition.empty and not activity_days.empty:
     st.info("No nutrition was logged this week yet (calories/macros are 0), but activity data (expenditure/steps) is available.")
