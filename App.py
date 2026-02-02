@@ -117,12 +117,12 @@ body = normalise_date_col(body, "date")
 body = align_to_monday(body, "date")
 body = to_num(body, ["weight", "body_fat", "fat_free_mass"])
 
-if not body.empty:
+if not body.empty and {"weight", "body_fat"}.issubset(body.columns):
     body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
     body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
 
 # ----------------------------
-# Date range selector (Monday weeks + presets, bulletproof)
+# Date range selector (Monday weeks + presets)
 # ----------------------------
 st.subheader("Date range")
 
@@ -192,7 +192,7 @@ def compute_preset(preset_name: str):
 
     if preset_name == "Last 3 months (calendar)":
         first_this_month = pd.Timestamp(today.year, today.month, 1)
-        end = first_this_month - pd.Timedelta(days=1)  # end of last month
+        end = first_this_month - pd.Timedelta(days=1)
         start_month = (first_this_month - pd.DateOffset(months=3)).normalize()
         start = pd.Timestamp(start_month.year, start_month.month, 1)
         return start.date(), end.date()
@@ -214,26 +214,19 @@ def compute_preset(preset_name: str):
 
 preset_start, preset_end = compute_preset(preset)
 
-# --- Clamp preset to widget bounds so Streamlit never throws ---
+# Clamp preset to bounds
 preset_start = max(min_date, min(preset_start, max_end_allowed))
 preset_end = max(min_date, min(preset_end, max_end_allowed))
 if preset_start > preset_end:
     preset_start = preset_end
 
-# --- Clamp existing session_state values if present ---
+# Clamp session_state if present
 if "start_date" in st.session_state and st.session_state["start_date"] is not None:
-    if st.session_state["start_date"] > max_end_allowed:
-        st.session_state["start_date"] = max_end_allowed
-    if st.session_state["start_date"] < min_date:
-        st.session_state["start_date"] = min_date
-
+    st.session_state["start_date"] = min(max(st.session_state["start_date"], min_date), max_end_allowed)
 if "end_date" in st.session_state and st.session_state["end_date"] is not None:
-    if st.session_state["end_date"] > max_end_allowed:
-        st.session_state["end_date"] = max_end_allowed
-    if st.session_state["end_date"] < min_date:
-        st.session_state["end_date"] = min_date
+    st.session_state["end_date"] = min(max(st.session_state["end_date"], min_date), max_end_allowed)
 
-# For non-custom presets, force the widget values (and disable widgets)
+# For non-custom presets, force widget values
 if preset != "Custom":
     st.session_state["start_date"] = preset_start
     st.session_state["end_date"] = preset_end
@@ -273,7 +266,7 @@ end_dt_sunday = sunday_of_week(pd.Timestamp(end_date))
 start_date = start_dt_monday.date()
 end_date = end_dt_sunday.date()
 
-# Report-Monday inclusion (extends filter window so stamped weekly row shows up)
+# Extend weekly filter if report Monday is included
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
@@ -286,7 +279,6 @@ st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includ
 energy = load_sheet(WS_ENERGY_WEEKLY)
 energy = normalise_date_col(energy, "date")
 energy = align_to_monday(energy, "date")
-
 energy = to_num(energy, [
     "days_logged",
     "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
@@ -301,7 +293,6 @@ energy = to_num(energy, [
 train = load_sheet(WS_TRAIN_WEEKLY)
 train = normalise_date_col(train, "date")
 train = align_to_monday(train, "date")
-
 train = to_num(train, [
     "sets_total", "volume_total", "workouts_completed",
     "avg_RIR", "muscle_groups_hit_count",
@@ -338,31 +329,20 @@ else:
         hide_index=True
     )
 
-
 # ----------------------------
-# Weight Trend (Altair)
+# Weight Trend
 # ----------------------------
 st.subheader("Weight Trend")
 if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_view.columns)):
     plot_df = body_view[["date", "weight", "lean_mass"]].copy()
-    melted = plot_df.melt("date", var_name="metric", value_name="value")
+    melted = plot_df.melt("date", var_name="metric", value_name="value").dropna()
 
     weight_chart = (
         alt.Chart(melted)
-        .mark_line(interpolate="monotone")
+        .mark_line(interpolate="monotone", point=True)
         .encode(
-            x=alt.X(
-                "date:T",
-                title="Date",
-                scale=alt.Scale(domain=[x_min, x_max]),
-                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True),
-            ),
-            y=alt.Y(
-                "value:Q",
-                title="Lbs",
-                scale=alt.Scale(domain=[145, 225]),
-                axis=alt.Axis(titlePadding=10),
-            ),
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[145, 225])),
             color=alt.Color("metric:N", title=""),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
@@ -370,36 +350,31 @@ if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_vie
                 alt.Tooltip("value:Q", title="Lbs", format=".2f"),
             ],
         )
-        .properties(height=360, padding={"left": 10, "right": 10, "top": 10, "bottom": 40})
+        .properties(height=360)
     )
     st.altair_chart(weight_chart, use_container_width=True)
 else:
     st.info("No body data in the selected date range.")
 
 # ----------------------------
-# Body Fat % (Altair)
+# Body Fat %
 # ----------------------------
 st.subheader("Body Fat %")
 if not body_view.empty and {"date", "body_fat"}.issubset(set(body_view.columns)):
-    bf_df = body_view[["date", "body_fat"]].copy()
+    bf_df = body_view[["date", "body_fat"]].copy().dropna()
 
     bf_chart = (
         alt.Chart(bf_df)
-        .mark_line(interpolate="monotone")
+        .mark_line(interpolate="monotone", point=True)
         .encode(
-            x=alt.X(
-                "date:T",
-                title="Date",
-                scale=alt.Scale(domain=[x_min, x_max]),
-                axis=alt.Axis(tickCount=10, titlePadding=20, labelOverlap=True),
-            ),
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
             y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=[5, 30])),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
                 alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
             ],
         )
-        .properties(height=300, padding={"left": 10, "right": 10, "top": 10, "bottom": 40})
+        .properties(height=300)
     )
     st.altair_chart(bf_chart, use_container_width=True)
 else:
@@ -411,7 +386,7 @@ else:
 st.header("⚡ Energy Balance + Training")
 
 # ----------------------------
-# Join using UNION of dates (so report-Monday rows show)
+# Join using UNION of dates
 # ----------------------------
 date_series = []
 if not body_view.empty and "date" in body_view.columns:
@@ -449,7 +424,7 @@ if "lean_mass" in combined.columns:
 if "fat_mass" in combined.columns:
     combined["fat_change"] = safe_num(combined["fat_mass"]).diff()
 
-# Energy balance
+# Energy balance (weekly avg kcal/day)
 if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
     combined["energy_balance"] = safe_num(combined["avg_calories"]) - safe_num(combined["avg_expenditure"])
 
@@ -467,7 +442,7 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
 # ----------------------------
-# This week so far (Daily_Energy + Staging_Workout_Log)
+# This week so far
 # ----------------------------
 st.subheader("This week so far")
 
@@ -569,8 +544,8 @@ else:
 with st.expander("Combined weekly table (filtered)", expanded=False):
     combined_table = date_for_table(combined)
 
-    round0 = ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta", "energy_balance", "avg_steps",
-              "training_minutes_total", "avg_workout_minutes", "volume_total"]
+    round0 = ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
+              "energy_balance", "avg_steps", "training_minutes_total", "avg_workout_minutes", "volume_total"]
     round2 = ["weight", "fat_free_mass", "fat_mass", "lean_mass", "weight_change", "lean_change", "fat_change",
               "avg_scale_weight_lb", "avg_trend_weight_lb", "sets_per_hour", "volume_per_minute"]
     round3 = ["protein_adherence_avg", "energy_adherence_avg"]
@@ -591,74 +566,100 @@ with st.expander("Combined weekly table (filtered)", expanded=False):
 # Charts
 # ============================================================
 
-# A) Calories vs Expenditure
+# A) Calories vs Expenditure (FIXED: line + points so 1-week doesn’t look blank)
 st.subheader("Calories vs Expenditure (weekly)")
-if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns) and combined["avg_calories"].notna().any():
+
+if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
     ce = combined[["date", "avg_calories", "avg_expenditure"]].copy()
-    ce_m = ce.melt("date", var_name="metric", value_name="value").dropna()
+    ce["date"] = pd.to_datetime(ce["date"], errors="coerce")
+    ce["avg_calories"] = pd.to_numeric(ce["avg_calories"], errors="coerce")
+    ce["avg_expenditure"] = pd.to_numeric(ce["avg_expenditure"], errors="coerce")
 
-    ce_chart = alt.Chart(ce_m).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("value:Q", title="kcal"),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".0f")]
-    ).properties(height=300)
+    ce_m = ce.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
-    st.altair_chart(ce_chart, use_container_width=True)
+    if ce_m.empty:
+        st.caption("No weekly energy data in the selected date range yet.")
+    else:
+        base = alt.Chart(ce_m).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="kcal"),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[
+                alt.Tooltip("date:T", title="Week"),
+                alt.Tooltip("metric:N"),
+                alt.Tooltip("value:Q", format=".0f"),
+            ],
+        )
+        ce_chart = (base.mark_line(interpolate="monotone") + base.mark_circle(size=90)).properties(height=300)
+        st.altair_chart(ce_chart, use_container_width=True)
 else:
-    st.caption("No weekly energy data in the selected date range yet.")
+    st.caption("No weekly energy columns found.")
 
-# B) Energy balance (symmetric around 0, minimum ±600)
-if "energy_balance" in combined.columns and combined["energy_balance"].notna().any():
+# B) Energy balance
+if "energy_balance" in combined.columns and safe_num(combined["energy_balance"]).notna().any():
     st.subheader("Estimated energy balance (Calories − Expenditure)")
-    eb = combined[["date", "energy_balance"]].dropna()
+    eb = combined[["date", "energy_balance"]].copy()
+    eb["date"] = pd.to_datetime(eb["date"], errors="coerce")
+    eb["energy_balance"] = pd.to_numeric(eb["energy_balance"], errors="coerce")
+    eb = eb.dropna(subset=["date", "energy_balance"])
 
-    max_abs = float(eb["energy_balance"].abs().max())
-    dom = max(600.0, max_abs)
-    dom = (int(dom / 50) + 1) * 50  # round up to nearest 50
+    if not eb.empty:
+        max_abs = float(eb["energy_balance"].abs().max())
+        dom = max(600.0, max_abs)
+        dom = (int(dom / 50) + 1) * 50
 
-    eb_chart = alt.Chart(eb).mark_bar().encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("energy_balance:Q", title="kcal / day (avg)", scale=alt.Scale(domain=[-dom, dom])),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("energy_balance:Q", format=".0f")]
-    ).properties(height=250)
+        eb_chart = alt.Chart(eb).mark_bar().encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("energy_balance:Q", title="kcal / day (avg)", scale=alt.Scale(domain=[-dom, dom])),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("energy_balance:Q", format=".0f")]
+        ).properties(height=250)
 
-    st.altair_chart(eb_chart, use_container_width=True)
+        st.altair_chart(eb_chart, use_container_width=True)
 
 # C) Weight change vs energy balance
-if "energy_balance" in combined.columns and combined["energy_balance"].notna().any() and "weight_change" in combined.columns:
-    st.subheader("Weight change vs energy balance (weekly)")
-    sc = combined[["date", "energy_balance", "weight_change"]].dropna()
-    scatter = alt.Chart(sc).mark_circle(size=90).encode(
-        x=alt.X("energy_balance:Q", title="Energy balance (kcal/day avg)"),
-        y=alt.Y("weight_change:Q", title="Weekly weight change (lbs)"),
-        tooltip=[
-            alt.Tooltip("date:T", title="Week"),
-            alt.Tooltip("energy_balance:Q", format=".0f"),
-            alt.Tooltip("weight_change:Q", format=".2f"),
-        ]
-    ).properties(height=300)
-    st.altair_chart(scatter, use_container_width=True)
+if ("energy_balance" in combined.columns) and ("weight_change" in combined.columns):
+    sc = combined[["date", "energy_balance", "weight_change"]].copy()
+    sc["date"] = pd.to_datetime(sc["date"], errors="coerce")
+    sc["energy_balance"] = pd.to_numeric(sc["energy_balance"], errors="coerce")
+    sc["weight_change"] = pd.to_numeric(sc["weight_change"], errors="coerce")
+    sc = sc.dropna(subset=["date", "energy_balance", "weight_change"])
+
+    if not sc.empty:
+        st.subheader("Weight change vs energy balance (weekly)")
+        scatter = alt.Chart(sc).mark_circle(size=90).encode(
+            x=alt.X("energy_balance:Q", title="Energy balance (kcal/day avg)"),
+            y=alt.Y("weight_change:Q", title="Weekly weight change (lbs)"),
+            tooltip=[
+                alt.Tooltip("date:T", title="Week"),
+                alt.Tooltip("energy_balance:Q", format=".0f"),
+                alt.Tooltip("weight_change:Q", format=".2f"),
+            ]
+        ).properties(height=300)
+        st.altair_chart(scatter, use_container_width=True)
 
 # D) Adherence dashboard
 st.subheader("Adherence (weekly)")
-has_adh = (("protein_adherence_avg" in combined.columns and combined["protein_adherence_avg"].notna().any()) or
-           ("energy_adherence_avg" in combined.columns and combined["energy_adherence_avg"].notna().any()))
+has_adh = (("protein_adherence_avg" in combined.columns and safe_num(combined["protein_adherence_avg"]).notna().any()) or
+           ("energy_adherence_avg" in combined.columns and safe_num(combined["energy_adherence_avg"]).notna().any()))
 if has_adh:
     adh = combined[["date"]].copy()
-    if "protein_adherence_avg" in combined.columns:
-        adh["protein_adherence_avg"] = combined["protein_adherence_avg"]
-    if "energy_adherence_avg" in combined.columns:
-        adh["energy_adherence_avg"] = combined["energy_adherence_avg"]
+    adh["date"] = pd.to_datetime(adh["date"], errors="coerce")
 
-    adh_m = adh.melt("date", var_name="metric", value_name="value").dropna()
-    adh_chart = alt.Chart(adh_m).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("value:Q", title="Adherence (ratio)", scale=alt.Scale(domain=[0, 2])),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".3f")]
-    ).properties(height=260)
-    st.altair_chart(adh_chart, use_container_width=True)
+    if "protein_adherence_avg" in combined.columns:
+        adh["protein_adherence_avg"] = pd.to_numeric(combined["protein_adherence_avg"], errors="coerce")
+    if "energy_adherence_avg" in combined.columns:
+        adh["energy_adherence_avg"] = pd.to_numeric(combined["energy_adherence_avg"], errors="coerce")
+
+    adh_m = adh.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
+
+    if not adh_m.empty:
+        adh_chart = alt.Chart(adh_m).mark_line(interpolate="monotone", point=True).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="Adherence (ratio)", scale=alt.Scale(domain=[0, 2])),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".3f")]
+        ).properties(height=260)
+        st.altair_chart(adh_chart, use_container_width=True)
 
     p_ok = (combined["protein_adherence_avg"] >= 0.9).mean() if "protein_adherence_avg" in combined.columns else pd.NA
     e_ok = (combined["energy_adherence_avg"] >= 0.9).mean() if "energy_adherence_avg" in combined.columns else pd.NA
@@ -670,63 +671,79 @@ if has_adh:
 else:
     st.caption("No adherence data yet.")
 
-# E) Lean vs Fat change decomposition
+# E) Lean vs Fat change
 st.subheader("Lean vs Fat change (weekly)")
-if ("lean_change" in combined.columns and combined["lean_change"].notna().any()) or ("fat_change" in combined.columns and combined["fat_change"].notna().any()):
+if ("lean_change" in combined.columns) or ("fat_change" in combined.columns):
     lf = combined[["date", "lean_change", "fat_change"]].copy()
-    lf_m = lf.melt("date", var_name="metric", value_name="value").dropna()
-    lf_chart = alt.Chart(lf_m).mark_bar().encode(
-        x=alt.X("date:T", title="Week", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("value:Q", title="lbs"),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-    ).properties(height=260)
-    st.altair_chart(lf_chart, use_container_width=True)
+    lf["date"] = pd.to_datetime(lf["date"], errors="coerce")
+    for c in ["lean_change", "fat_change"]:
+        if c in lf.columns:
+            lf[c] = pd.to_numeric(lf[c], errors="coerce")
+    lf_m = lf.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
+
+    if not lf_m.empty:
+        lf_chart = alt.Chart(lf_m).mark_bar().encode(
+            x=alt.X("date:T", title="Week", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="lbs"),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
+        ).properties(height=260)
+        st.altair_chart(lf_chart, use_container_width=True)
+    else:
+        st.caption("No change data yet.")
 else:
     st.caption("No change data yet.")
 
-# F) Training minutes + density
+# F) Training efficiency
 st.subheader("Training efficiency")
-has_eff = ("training_minutes_total" in combined.columns and combined["training_minutes_total"].notna().any())
+has_eff = ("training_minutes_total" in combined.columns and safe_num(combined["training_minutes_total"]).notna().any())
 if has_eff:
     te_cols = ["date", "training_minutes_total"]
     if "sets_per_hour" in combined.columns:
         te_cols.append("sets_per_hour")
     if "volume_per_minute" in combined.columns:
         te_cols.append("volume_per_minute")
-    te = combined[te_cols].copy().dropna(subset=["training_minutes_total"])
-    te_m = te.melt("date", var_name="metric", value_name="value").dropna()
 
-    te_chart = alt.Chart(te_m).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("value:Q", title="Value"),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-    ).properties(height=260)
+    te = combined[te_cols].copy()
+    te["date"] = pd.to_datetime(te["date"], errors="coerce")
+    for c in te_cols:
+        if c != "date":
+            te[c] = pd.to_numeric(te[c], errors="coerce")
+    te_m = te.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
-    st.altair_chart(te_chart, use_container_width=True)
+    if not te_m.empty:
+        te_chart = alt.Chart(te_m).mark_line(interpolate="monotone", point=True).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="Value"),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
+        ).properties(height=260)
+        st.altair_chart(te_chart, use_container_width=True)
 else:
     st.caption("No training minutes yet.")
 
 # G) Training vs Lean Mass
 st.subheader("Training load vs Lean Mass (weekly)")
 has_training_metric = (
-    ("volume_total" in combined.columns and combined["volume_total"].notna().any()) or
-    ("sets_total" in combined.columns and combined["sets_total"].notna().any())
+    ("volume_total" in combined.columns and safe_num(combined["volume_total"]).notna().any()) or
+    ("sets_total" in combined.columns and safe_num(combined["sets_total"]).notna().any())
 )
 if has_training_metric and ("lean_mass" in combined.columns):
-    metric = "volume_total" if ("volume_total" in combined.columns and combined["volume_total"].notna().any()) else "sets_total"
-    tl = combined[["date", "lean_mass", metric]].copy().dropna(subset=["lean_mass"])
-    tl_m = tl.melt("date", var_name="metric", value_name="value").dropna()
+    metric = "volume_total" if ("volume_total" in combined.columns and safe_num(combined["volume_total"]).notna().any()) else "sets_total"
+    tl = combined[["date", "lean_mass", metric]].copy()
+    tl["date"] = pd.to_datetime(tl["date"], errors="coerce")
+    tl["lean_mass"] = pd.to_numeric(tl["lean_mass"], errors="coerce")
+    tl[metric] = pd.to_numeric(tl[metric], errors="coerce")
+    tl_m = tl.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
-    tl_chart = alt.Chart(tl_m).mark_line(interpolate="monotone").encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("value:Q", title="Value"),
-        color=alt.Color("metric:N", title=""),
-        tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-    ).properties(height=300)
-
-    st.altair_chart(tl_chart, use_container_width=True)
+    if not tl_m.empty:
+        tl_chart = alt.Chart(tl_m).mark_line(interpolate="monotone", point=True).encode(
+            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("value:Q", title="Value"),
+            color=alt.Color("metric:N", title=""),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
+        ).properties(height=300)
+        st.altair_chart(tl_chart, use_container_width=True)
 else:
     st.caption("No training data in the selected date range yet.")
 
@@ -742,7 +759,6 @@ if food.empty:
 else:
     food = food.copy()
 
-    # ---- Normalize column names into a common schema ----
     staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
     raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
 
@@ -801,9 +817,9 @@ else:
         st.dataframe(top_freq, hide_index=True)
 
         st.subheader("Top foods (by totals)")
-        colA, colB = st.columns(2)
+        colX, colY = st.columns(2)
 
-        with colA:
+        with colX:
             st.caption("By total calories")
             top_cal = (
                 food_view.groupby("food_name", as_index=False)["calories"]
@@ -813,7 +829,7 @@ else:
             )
             st.dataframe(top_cal, hide_index=True)
 
-        with colB:
+        with colY:
             st.caption("By total protein")
             top_pro = (
                 food_view.groupby("food_name", as_index=False)["protein"]
@@ -826,12 +842,9 @@ else:
         st.subheader("Most common foods by time of day")
         if "time" in food_view.columns and food_view["time"].notna().any():
             fv = food_view.copy()
-
-            # Try a couple common formats: "7:05 PM" and "19:05"
             t1 = pd.to_datetime(fv["time"], format="%I:%M %p", errors="coerce")
             t2 = pd.to_datetime(fv["time"], format="%H:%M", errors="coerce")
             t = t1.fillna(t2)
-
             fv["hour"] = t.dt.hour
 
             def bucket(h):
@@ -869,12 +882,16 @@ else:
             macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
             macro_chart = (
                 alt.Chart(macro_m)
-                .mark_line(interpolate="monotone")
+                .mark_line(interpolate="monotone", point=True)
                 .encode(
                     x=alt.X("date:T", title="Date"),
                     y=alt.Y("grams:Q", title="grams"),
                     color=alt.Color("macro:N", title=""),
-                    tooltip=[alt.Tooltip("date:T"), alt.Tooltip("macro:N"), alt.Tooltip("grams:Q", format=".0f")],
+                    tooltip=[
+                        alt.Tooltip("date:T"),
+                        alt.Tooltip("macro:N"),
+                        alt.Tooltip("grams:Q", format=".0f"),
+                    ],
                 )
                 .properties(height=260)
             )
