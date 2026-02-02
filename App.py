@@ -4,12 +4,26 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
+# ============================================================
+# Config: chart scales (edit here)
+# ============================================================
+WEIGHT_DOMAIN = [145, 225]
+BODYFAT_DOMAIN = [5, 30]
+
+CALORIES_DOMAIN = [1000, 5000]       # Calories vs Expenditure scale
+LEAN_DOMAIN = [150, 220]             # Lean mass scale
+VOLUME_DOMAIN = [70000, 90000]       # Training volume scale (lbs·reps)
+ADH_PCT_DOMAIN = [50, 130]           # Adherence % scale (set to [0, 120] if you prefer)
+
+# ============================================================
+# Streamlit page setup
+# ============================================================
 st.set_page_config(page_title="Body Composition Tracker", layout="wide")
 st.title("📊 Body Composition Tracker")
 
-# ----------------------------
+# ============================================================
 # Google Sheets setup
-# ----------------------------
+# ============================================================
 SHEET_ID = st.secrets["SHEET_ID"]
 
 SCOPES = [
@@ -30,18 +44,18 @@ WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
 WS_TRAIN_WEEKLY = "Weekly_Training"
 
-# Optional sources (used for "This week so far" + patterns)
+# Optional sources (used for "This week so far" + debug)
 WS_DAILY_ENERGY = "Daily_Energy"
 WS_WORKOUT_LOG = "Staging_Workout_Log"
 
 # Food log staging
 WS_FOOD_LOG = "Staging_MacroFactor_FoodLog"
 
-# ----------------------------
+# ============================================================
 # Helpers
-# ----------------------------
+# ============================================================
 @st.cache_data(ttl=120, show_spinner=False)
-def _cached_get_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
+def _cached_get_all_records(_sheet_id: str, worksheet_name: str) -> list[dict]:
     """Cache records for 2 minutes to reduce Sheets calls."""
     try:
         ws = sh.worksheet(worksheet_name)
@@ -108,42 +122,103 @@ def monday_of(d: pd.Timestamp) -> pd.Timestamp:
 def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
     return monday_of(d) + pd.Timedelta(days=6)
 
-# Optional: schema normalizers (safe no-ops if headers already correct)
+# ----------------------------
+# Schema normalisers
+# ----------------------------
 def normalise_daily_energy_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Daily_Energy columns from older Apps Script schema to the names the app expects."""
+    """Rename Daily_Energy columns (if variants exist) to the names the app expects."""
     if df.empty:
         return df
     df = df.copy()
+
     rename_map = {
         "logged": "days_logged_flag",
+        "Logged": "days_logged_flag",
+
         "calTarget": "calorie_target",
+        "Target Calories (kcal)": "calorie_target",
+
         "protein": "protein_g",
         "carbs": "carbs_g",
         "fat": "fat_g",
+
         "proteinAdh": "protein_adherence",
         "energyAdh": "energy_adherence",
+
         "trendW": "trend_weight_lb",
+        "Trend Weight (lbs)": "trend_weight_lb",
+
+        "scaleWeight": "scale_weight_lb",
+        "Scale Weight (lbs)": "scale_weight_lb",
     }
+
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     return df
 
 def normalise_workout_log_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Workout Log columns from older schema to the names used in app calculations."""
+    """Rename Staging_Workout_Log columns (if variants exist) to names used by the app."""
     if df.empty:
         return df
     df = df.copy()
+
     rename_map = {
         "weight": "weight_lb",
+        "Weight (lbs)": "weight_lb",
+        "Reps": "reps",
+        "RIR": "rir",
         "Workout Duration": "workout_duration",
         "Set Type": "set_type",
     }
+
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     return df
 
+def pick_logged_days(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Decide which daily rows count as 'logged'.
+    Priority: days_logged_flag==1
+    Fallback: any meaningful nutrition data (calories/macros > 0)
+    """
+    if df.empty:
+        return df
 
-# ----------------------------
+    out = df.copy()
+    flag = safe_num(out.get("days_logged_flag", pd.Series([pd.NA] * len(out)))).fillna(0)
+
+    calories = safe_num(out.get("calories", pd.Series([pd.NA] * len(out)))).fillna(0)
+    p = safe_num(out.get("protein_g", pd.Series([pd.NA] * len(out)))).fillna(0)
+    c = safe_num(out.get("carbs_g", pd.Series([pd.NA] * len(out)))).fillna(0)
+    f = safe_num(out.get("fat_g", pd.Series([pd.NA] * len(out)))).fillna(0)
+
+    logged_mask = (flag >= 1) | (calories > 0) | (p > 0) | (c > 0) | (f > 0)
+    return out.loc[logged_mask].copy()
+
+def metric_or_dash(x, fmt="{:.0f}"):
+    if x is None or pd.isna(x):
+        return "—"
+    try:
+        return fmt.format(float(x))
+    except Exception:
+        return "—"
+
+def safe_domain(values: pd.Series, preferred_domain: list[float], pad_pct: float = 0.05):
+    """
+    If data fits inside preferred_domain, use it.
+    Otherwise compute a padded min/max domain from the data.
+    """
+    v = pd.to_numeric(values, errors="coerce").dropna()
+    if v.empty:
+        return preferred_domain
+    vmin, vmax = float(v.min()), float(v.max())
+    pmin, pmax = float(preferred_domain[0]), float(preferred_domain[1])
+    if vmin >= pmin and vmax <= pmax:
+        return preferred_domain
+    pad = max(1e-6, (vmax - vmin) * pad_pct)
+    return [vmin - pad, vmax + pad]
+
+# ============================================================
 # Load BODY weekly
-# ----------------------------
+# ============================================================
 body = load_sheet(WS_BODY_WEEKLY)
 body = body.rename(columns={"date_time": "date"}) if "date_time" in body.columns and "date" not in body.columns else body
 body = normalise_date_col(body, "date")
@@ -154,9 +229,9 @@ if not body.empty and {"weight", "body_fat"}.issubset(body.columns):
     body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
     body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
 
-# ----------------------------
-# Date range selector (Monday weeks + presets)
-# ----------------------------
+# ============================================================
+# Date range selector (Monday weeks + presets, bulletproof)
+# ============================================================
 st.subheader("Date range")
 
 if body.empty:
@@ -242,13 +317,13 @@ def compute_preset(preset_name: str):
 
 preset_start, preset_end = compute_preset(preset)
 
-# Clamp preset to bounds
+# Clamp preset to widget bounds
 preset_start = max(min_date, min(preset_start, max_end_allowed))
 preset_end = max(min_date, min(preset_end, max_end_allowed))
 if preset_start > preset_end:
     preset_start = preset_end
 
-# Clamp session_state if present
+# Clamp existing session_state values if present
 if "start_date" in st.session_state and st.session_state["start_date"] is not None:
     st.session_state["start_date"] = min(max(st.session_state["start_date"], min_date), max_end_allowed)
 if "end_date" in st.session_state and st.session_state["end_date"] is not None:
@@ -290,23 +365,23 @@ if start_date > end_date:
 # Snap to Monday-week boundaries
 start_dt_monday = monday_of(pd.Timestamp(start_date))
 end_dt_sunday = sunday_of_week(pd.Timestamp(end_date))
-
 start_date = start_dt_monday.date()
 end_date = end_dt_sunday.date()
 
-# Extend weekly filter if report Monday is included
+# Extend weekly filter window so report-Monday rows show up
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
 st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
 
-# ----------------------------
+# ============================================================
 # Load weekly ENERGY
-# ----------------------------
+# ============================================================
 energy = load_sheet(WS_ENERGY_WEEKLY)
 energy = normalise_date_col(energy, "date")
 energy = align_to_monday(energy, "date")
+
 energy = to_num(energy, [
     "days_logged",
     "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
@@ -315,21 +390,22 @@ energy = to_num(energy, [
     "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps"
 ])
 
-# ----------------------------
+# ============================================================
 # Load weekly TRAINING
-# ----------------------------
+# ============================================================
 train = load_sheet(WS_TRAIN_WEEKLY)
 train = normalise_date_col(train, "date")
 train = align_to_monday(train, "date")
+
 train = to_num(train, [
     "sets_total", "volume_total", "workouts_completed",
     "avg_RIR", "muscle_groups_hit_count",
     "training_minutes_total", "avg_workout_minutes"
 ])
 
-# ----------------------------
-# Filter views
-# ----------------------------
+# ============================================================
+# Filter weekly views
+# ============================================================
 body_view = filter_range(body, start_date, end_date_for_weekly, "date")
 energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
 train_view = filter_range(train, start_date, end_date_for_weekly, "date")
@@ -337,9 +413,9 @@ train_view = filter_range(train, start_date, end_date_for_weekly, "date")
 x_min = pd.Timestamp(start_date)
 x_max = pd.Timestamp(end_date_for_weekly)
 
-# ----------------------------
+# ============================================================
 # Display: Body table
-# ----------------------------
+# ============================================================
 st.subheader("Weekly Body Comp (filtered)")
 body_table = date_for_table(body_view)
 
@@ -357,9 +433,9 @@ else:
         hide_index=True
     )
 
-# ----------------------------
-# Weight Trend
-# ----------------------------
+# ============================================================
+# Charts: Weight Trend
+# ============================================================
 st.subheader("Weight Trend")
 if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_view.columns)):
     plot_df = body_view[["date", "weight", "lean_mass"]].copy()
@@ -370,7 +446,7 @@ if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_vie
         .mark_line(interpolate="monotone", point=True)
         .encode(
             x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=[145, 225])),
+            y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=WEIGHT_DOMAIN)),
             color=alt.Color("metric:N", title=""),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
@@ -384,9 +460,9 @@ if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_vie
 else:
     st.info("No body data in the selected date range.")
 
-# ----------------------------
-# Body Fat %
-# ----------------------------
+# ============================================================
+# Charts: Body Fat %
+# ============================================================
 st.subheader("Body Fat %")
 if not body_view.empty and {"date", "body_fat"}.issubset(set(body_view.columns)):
     bf_df = body_view[["date", "body_fat"]].copy().dropna()
@@ -396,7 +472,7 @@ if not body_view.empty and {"date", "body_fat"}.issubset(set(body_view.columns))
         .mark_line(interpolate="monotone", point=True)
         .encode(
             x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=[5, 30])),
+            y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=BODYFAT_DOMAIN)),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
                 alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
@@ -409,13 +485,11 @@ else:
     st.info("No data in the selected date range.")
 
 # ============================================================
-# Energy + Training
+# Energy + Training (weekly combined)
 # ============================================================
 st.header("⚡ Energy Balance + Training")
 
-# ----------------------------
-# Join using UNION of dates
-# ----------------------------
+# Join using UNION of dates (so report-Monday rows show)
 date_series = []
 if not body_view.empty and "date" in body_view.columns:
     date_series.append(body_view["date"])
@@ -469,91 +543,72 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined["volume_per_minute"] = vol / minutes
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
+# ============================================================
+# Debug toggles
+# ============================================================
+with st.expander("🛠 Debug", expanded=False):
+    debug_on = st.checkbox("Show debug tables + computed metrics", value=False)
 
-# ----------------------------
-# This week so far (ALWAYS current week) + Debug (last week)
-# ----------------------------
+# ============================================================
+# This week so far (ALWAYS current week: Monday -> today)
+# ============================================================
 st.subheader("This week so far")
 
-today_ts = pd.Timestamp.today().normalize()
-this_week_start_dt = today_ts - pd.to_timedelta(today_ts.weekday(), unit="D")  # Monday
-this_week_end_dt = today_ts  # today (so far)
+today = pd.Timestamp.today().normalize()
+week_start_dt = monday_of(today)   # Monday
+week_start = week_start_dt.date()
+week_end = today.date()
 
-week_start = this_week_start_dt.date()
-week_end = this_week_end_dt.date()
-
-st.caption(f"Current week window: {week_start} → {week_end}")
-
-# Debug window (last week Mon–Sun)
-last_week_start_dt = this_week_start_dt - pd.Timedelta(days=7)
-last_week_end_dt = this_week_start_dt - pd.Timedelta(days=1)
-
-with st.expander("🛠 Debug: inspect last week data", expanded=False):
-    debug_last_week = st.checkbox("Show last week's raw data (debug only)", value=False)
-
-# Load Daily_Energy + Workout Log (once)
 daily_energy = load_sheet(WS_DAILY_ENERGY)
 daily_energy = normalise_daily_energy_schema(daily_energy)
 daily_energy = normalise_date_col(daily_energy, "date")
+
 daily_energy = to_num(daily_energy, [
-    "days_logged_flag", "calories", "expenditure", "calorie_target",
+    "days_logged_flag", "calories", "expenditure", "calorie_target", "calorie_delta",
     "protein_g", "carbs_g", "fat_g",
+    "protein_target_g", "carbs_target_g", "fat_target_g",
     "protein_adherence", "energy_adherence",
+    "scale_weight_lb", "trend_weight_lb",
     "steps"
 ])
+
+daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
+daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
 workout_log = load_sheet(WS_WORKOUT_LOG)
 workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
 workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
 
-# Filter to CURRENT week (production)
-daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
 workout_week = filter_range(workout_log, week_start, week_end, "date")
-
-# Debug: show LAST week tables (optional)
-if debug_last_week:
-    dbg_start = last_week_start_dt.date()
-    dbg_end = last_week_end_dt.date()
-    st.caption(f"Debug (last week Mon–Sun): {dbg_start} → {dbg_end}")
-
-    dbg_daily = filter_range(daily_energy, dbg_start, dbg_end, "date")
-    dbg_workouts = filter_range(workout_log, dbg_start, dbg_end, "date")
-
-    st.markdown("**Daily_Energy (last week)**")
-    st.dataframe(date_for_table(dbg_daily), hide_index=True)
-
-    st.markdown("**Staging_Workout_Log (last week)**")
-    st.dataframe(date_for_table(dbg_workouts), hide_index=True)
-
 
 c1, c2, c3, c4 = st.columns(4)
 
 # Energy so far this week
-if not daily_energy_week.empty and "calories" in daily_energy_week.columns:
-    logged = daily_energy_week.copy()
-    if "days_logged_flag" in logged.columns:
-        logged = logged[safe_num(logged["days_logged_flag"]).fillna(0) == 1].copy()
+if not daily_energy_week_logged.empty:
+    logged = daily_energy_week_logged.copy()
 
-    days_logged = int(safe_num(logged["days_logged_flag"]).sum()) if "days_logged_flag" in logged.columns else int(len(logged))
+    days_logged = int(len(logged))
     avg_cals = logged["calories"].mean() if "calories" in logged.columns else pd.NA
     avg_exp = logged["expenditure"].mean() if "expenditure" in logged.columns else pd.NA
     avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
     avg_steps = logged["steps"].mean() if "steps" in logged.columns else pd.NA
+
     avg_p_adh = logged["protein_adherence"].mean() if "protein_adherence" in logged.columns else pd.NA
     avg_e_adh = logged["energy_adherence"].mean() if "energy_adherence" in logged.columns else pd.NA
 
     with c1:
         st.metric("Days logged", days_logged)
     with c2:
-        st.metric("Avg calories", f"{avg_cals:.0f}" if pd.notna(avg_cals) else "—")
-        st.metric("Avg expenditure", f"{avg_exp:.0f}" if pd.notna(avg_exp) else "—")
+        st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
+        st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
     with c3:
-        st.metric("Avg balance", f"{avg_bal:.0f}" if pd.notna(avg_bal) else "—")
-        st.metric("Avg steps", f"{avg_steps:.0f}" if pd.notna(avg_steps) else "—")
+        st.metric("Avg balance", metric_or_dash(avg_bal, "{:.0f}"))
+        st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
     with c4:
-        st.metric("Protein adherence", f"{avg_p_adh*100:.0f}%" if pd.notna(avg_p_adh) else "—")
-        st.metric("Energy adherence", f"{avg_e_adh*100:.0f}%" if pd.notna(avg_e_adh) else "—")
+        # adherence from Daily_Energy is typically ratio (e.g., 0.92). Show as percent if present.
+        st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
+        st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
 else:
     with c1:
         st.metric("Days logged", "—")
@@ -570,8 +625,11 @@ else:
 # Training so far this week (unique sessions)
 if not workout_week.empty and ("workout_duration" in workout_week.columns) and ("workout" in workout_week.columns):
     wk = workout_week.copy()
+
+    # unique session key by day + workout name
     wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
 
+    # workout_duration looks like seconds in your screenshot; convert to minutes
     session_minutes = wk.groupby("session_key")["workout_duration"].max() / 60.0
     minutes_total = float(session_minutes.sum())
     workouts_completed = int(session_minutes.shape[0])
@@ -580,7 +638,10 @@ if not workout_week.empty and ("workout_duration" in workout_week.columns) and (
     wk_working = wk[stypes.isin(["standard set", "failure set"])].copy() if len(stypes) else wk.copy()
 
     sets_total = int(len(wk_working))
-    volume_total = (safe_num(wk_working["weight_lb"]) * safe_num(wk_working["reps"])).sum() if ("weight_lb" in wk_working.columns and "reps" in wk_working.columns) else pd.NA
+    volume_total = (
+        (safe_num(wk_working["weight_lb"]) * safe_num(wk_working["reps"])).sum()
+        if ("weight_lb" in wk_working.columns and "reps" in wk_working.columns) else pd.NA
+    )
     avg_rir = safe_num(wk_working["rir"]).mean() if "rir" in wk_working.columns else pd.NA
     sets_per_hour = sets_total / (minutes_total / 60.0) if minutes_total > 0 else pd.NA
 
@@ -588,20 +649,62 @@ if not workout_week.empty and ("workout_duration" in workout_week.columns) and (
     t1, t2, t3, t4 = st.columns(4)
     with t1:
         st.metric("Workouts", workouts_completed)
-        st.metric("Minutes", f"{minutes_total:.1f}")
+        st.metric("Minutes", metric_or_dash(minutes_total, "{:.1f}"))
     with t2:
         st.metric("Sets", sets_total)
-        st.metric("Avg RIR", f"{avg_rir:.2f}" if pd.notna(avg_rir) else "—")
+        st.metric("Avg RIR", metric_or_dash(avg_rir, "{:.2f}"))
     with t3:
-        st.metric("Volume (lbs·reps)", f"{volume_total:.0f}" if pd.notna(volume_total) else "—")
+        st.metric("Volume (lbs·reps)", metric_or_dash(volume_total, "{:.0f}"))
     with t4:
-        st.metric("Sets/hour", f"{sets_per_hour:.1f}" if pd.notna(sets_per_hour) else "—")
+        st.metric("Sets/hour", metric_or_dash(sets_per_hour, "{:.1f}"))
 else:
     st.caption("No workout log rows for this week yet.")
 
-# ----------------------------
-# Combined table
-# ----------------------------
+# ============================================================
+# Debug: last week (Mon–Sun)
+# ============================================================
+if debug_on:
+    last_week_start = (this_monday - pd.Timedelta(days=7)).date()
+    last_week_end = (this_monday - pd.Timedelta(days=1)).date()
+    st.caption(f"Debug (last week Mon–Sun): {last_week_start} → {last_week_end}")
+
+    de_last = filter_range(daily_energy, last_week_start, last_week_end, "date")
+    wl_last = filter_range(workout_log, last_week_start, last_week_end, "date")
+
+    st.subheader("Daily_Energy (last week)")
+    st.dataframe(date_for_table(de_last), hide_index=True)
+
+    st.subheader("Staging_Workout_Log (last week)")
+    st.dataframe(date_for_table(wl_last), hide_index=True)
+
+    # show computed metrics for last week as a sanity check
+    logged_last = pick_logged_days(de_last)
+    st.subheader("Computed metrics (last week)")
+
+    d1, d2, d3, d4 = st.columns(4)
+    if not logged_last.empty:
+        avg_cals = logged_last["calories"].mean() if "calories" in logged_last.columns else pd.NA
+        avg_exp = logged_last["expenditure"].mean() if "expenditure" in logged_last.columns else pd.NA
+        avg_steps = logged_last["steps"].mean() if "steps" in logged_last.columns else pd.NA
+        avg_p = logged_last["protein_adherence"].mean() if "protein_adherence" in logged_last.columns else pd.NA
+        avg_e = logged_last["energy_adherence"].mean() if "energy_adherence" in logged_last.columns else pd.NA
+
+        with d1:
+            st.metric("Days logged", int(len(logged_last)))
+        with d2:
+            st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
+            st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
+        with d3:
+            st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
+        with d4:
+            st.metric("Protein adherence", metric_or_dash(avg_p * 100 if pd.notna(avg_p) else pd.NA, "{:.0f}%"))
+            st.metric("Energy adherence", metric_or_dash(avg_e * 100 if pd.notna(avg_e) else pd.NA, "{:.0f}%"))
+    else:
+        st.info("No logged days detected last week (days_logged_flag=0 AND calories/macros are 0).")
+
+# ============================================================
+# Combined table (weekly)
+# ============================================================
 with st.expander("Combined weekly table (filtered)", expanded=False):
     combined_table = date_for_table(combined)
 
@@ -627,7 +730,7 @@ with st.expander("Combined weekly table (filtered)", expanded=False):
 # Charts
 # ============================================================
 
-# A) Calories vs Expenditure (line + dots so 1-week doesn't look blank) + fixed y-scale
+# A) Calories vs Expenditure (weekly) — fixed y-scale 1000–5000
 st.subheader("Calories vs Expenditure (weekly)")
 
 if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
@@ -646,7 +749,7 @@ if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.colum
             y=alt.Y(
                 "value:Q",
                 title="kcal",
-                scale=alt.Scale(domain=[1000, 5000], clamp=True)
+                scale=alt.Scale(domain=CALORIES_DOMAIN, clamp=True)
             ),
             color=alt.Color("metric:N", title=""),
             tooltip=[
@@ -703,7 +806,7 @@ if not sc.empty:
     ).properties(height=300)
     st.altair_chart(scatter, use_container_width=True)
 
-# D) Adherence dashboard (PERCENT SCALE)
+# D) Adherence dashboard — show as percent
 st.subheader("Adherence (weekly)")
 
 has_adh = (
@@ -732,7 +835,7 @@ if has_adh:
             y=alt.Y(
                 "value_pct:Q",
                 title="Adherence (%)",
-                scale=alt.Scale(domain=[50, 130], clamp=True)
+                scale=alt.Scale(domain=ADH_PCT_DOMAIN, clamp=True),
             ),
             color=alt.Color("metric:N", title=""),
             tooltip=[
@@ -744,18 +847,19 @@ if has_adh:
 
         st.altair_chart(adh_chart, use_container_width=True)
 
+    # Keep threshold logic in ratio space (0.9 = 90%)
     p_ok = (combined["protein_adherence_avg"] >= 0.9).mean() if "protein_adherence_avg" in combined.columns else pd.NA
     e_ok = (combined["energy_adherence_avg"] >= 0.9).mean() if "energy_adherence_avg" in combined.columns else pd.NA
 
     a1, a2 = st.columns(2)
     with a1:
-        st.metric("% weeks protein ≥ 90%", f"{p_ok*100:.0f}%" if pd.notna(p_ok) else "—")
+        st.metric("% weeks protein ≥ 90%", metric_or_dash(p_ok * 100 if pd.notna(p_ok) else pd.NA, "{:.0f}%"))
     with a2:
-        st.metric("% weeks energy ≥ 90%", f"{e_ok*100:.0f}%" if pd.notna(e_ok) else "—")
+        st.metric("% weeks energy ≥ 90%", metric_or_dash(e_ok * 100 if pd.notna(e_ok) else pd.NA, "{:.0f}%"))
 else:
     st.caption("No adherence data yet.")
 
-# E) Lean vs Fat change decomposition
+# E) Lean vs Fat change
 st.subheader("Lean vs Fat change (weekly)")
 lf = combined[["date"]].copy()
 lf["date"] = pd.to_datetime(lf["date"], errors="coerce")
@@ -808,9 +912,10 @@ if has_eff:
 else:
     st.caption("No training minutes yet.")
 
-# G) Training load and Lean Mass (STACKED CHARTS — Option 02) with fixed scales
+# G) Training load + Lean mass (STACKED CHARTS — Option 02)
 st.subheader("Training load and Lean Mass (weekly)")
 
+# Choose training metric to show (prefer volume_total, else sets_total, else minutes)
 train_metric = None
 for candidate in ["volume_total", "sets_total", "training_minutes_total"]:
     if candidate in combined.columns and safe_num(combined[candidate]).notna().any():
@@ -827,17 +932,19 @@ tr["date"] = pd.to_datetime(tr["date"], errors="coerce")
 if train_metric is not None:
     tr[train_metric] = pd.to_numeric(combined[train_metric], errors="coerce")
 
+# Lean mass chart (fixed 150–220)
 lm_plot = lm.dropna(subset=["date", "lean_mass"]) if "lean_mass" in lm.columns else pd.DataFrame()
 if not lm_plot.empty:
     lean_chart = alt.Chart(lm_plot).mark_line(interpolate="monotone", point=True).encode(
         x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)", scale=alt.Scale(domain=[150, 220])),
+        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)", scale=alt.Scale(domain=LEAN_DOMAIN, clamp=True)),
         tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip("lean_mass:Q", format=".2f")]
     ).properties(height=240)
     st.altair_chart(lean_chart, use_container_width=True)
 else:
     st.caption("No lean mass data yet (or none in the selected range).")
 
+# Training chart (fixed 70000–90000 for volume_total; auto fallback if values don't fit)
 if train_metric is not None:
     tr_plot = tr.dropna(subset=["date", train_metric])
     if not tr_plot.empty:
@@ -848,8 +955,12 @@ if train_metric is not None:
         }
         y_title = title_map.get(train_metric, train_metric)
 
-        # Only force 70k–90k scale for volume_total (otherwise it would look flat)
-        y_scale = alt.Scale(domain=[70000, 90000]) if train_metric == "volume_total" else alt.Undefined
+        # Use your preferred domain only when the metric is volume_total; otherwise let it autoscale
+        if train_metric == "volume_total":
+            dom = safe_domain(tr_plot[train_metric], VOLUME_DOMAIN)
+            y_scale = alt.Scale(domain=dom, clamp=True)
+        else:
+            y_scale = alt.Scale()
 
         train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
             x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
