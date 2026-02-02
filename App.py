@@ -216,6 +216,34 @@ def safe_domain(values: pd.Series, preferred_domain: list[float], pad_pct: float
     pad = max(1e-6, (vmax - vmin) * pad_pct)
     return [vmin - pad, vmax + pad]
 
+def kpi_card(label: str, value: str, tone: str = "neutral", help_text: str = ""):
+    """
+    tone: 'good' | 'warn' | 'bad' | 'neutral'
+    """
+    color = {
+        "good": "#16a34a",     # green
+        "warn": "#f59e0b",     # amber
+        "bad": "#dc2626",      # red
+        "neutral": "#64748b",  # slate
+    }.get(tone, "#64748b")
+
+    help_html = f"<div style='margin-top:6px; font-size:12px; color:#94a3b8'>{help_text}</div>" if help_text else ""
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: rgba(15, 23, 42, 0.02);
+        ">
+          <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;">{label}</div>
+          <div style="font-size: 22px; font-weight: 700; color: {color};">{value}</div>
+          {help_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ============================================================
 # Load BODY weekly
 # ============================================================
@@ -996,6 +1024,170 @@ if train_metric is not None:
         st.caption("No training data in the selected range yet.")
 else:
     st.caption("No training metric available yet (volume_total / sets_total / training_minutes_total).")
+
+# ============================================================
+# 🎯 Phase helper (Bulk / Recomp / Cut)
+# Put this AFTER combined is built + derived fields are calculated
+# ============================================================
+st.header("🎯 Phase helper")
+
+goal = st.selectbox(
+    "Goal mode",
+    ["Auto (suggest)", "Bulk", "Recomp", "Cut"],
+    index=0,
+    help="Auto suggests a phase using 4-week trends. You can also lock it to Bulk/Recomp/Cut to colour KPIs accordingly."
+)
+
+lookback_weeks = st.slider(
+    "Trend window (weeks)",
+    min_value=4,
+    max_value=8,
+    value=4,
+    step=1,
+    help="Uses week-to-week deltas over this window."
+)
+
+# --- Prep numeric fields safely ---
+trend = combined.copy()
+trend["date"] = pd.to_datetime(trend["date"], errors="coerce")
+
+for col in ["weight", "lean_mass", "fat_mass", "body_fat", "energy_balance", "avg_calories", "avg_expenditure", "volume_total", "sets_total"]:
+    if col in trend.columns:
+        trend[col] = pd.to_numeric(trend[col], errors="coerce")
+
+trend = trend.dropna(subset=["date"]).sort_values("date")
+
+# Need at least (lookback_weeks + 1) rows to compute deltas properly
+if len(trend) < 2:
+    st.caption("Not enough weekly rows yet to compute trends.")
+else:
+    # --- 4-8 week deltas (latest vs N weeks ago) ---
+    def delta(col: str):
+        if col not in trend.columns:
+            return pd.NA
+        s = trend[col]
+        return s.iloc[-1] - s.shift(lookback_weeks).iloc[-1]
+
+    d_weight = delta("weight")
+    d_lean   = delta("lean_mass")
+    d_fat    = delta("fat_mass")
+    d_bf     = delta("body_fat")
+
+    # rolling averages (more stable than single-week)
+    eb_avg = trend["energy_balance"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "energy_balance" in trend.columns else pd.NA
+    cal_avg = trend["avg_calories"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "avg_calories" in trend.columns else pd.NA
+    exp_avg = trend["avg_expenditure"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "avg_expenditure" in trend.columns else pd.NA
+
+    # --- Auto suggestion logic (simple + honest) ---
+    # Uses BF level + direction + lean trend; not "absolute truth"
+    latest_bf = trend["body_fat"].iloc[-1] if "body_fat" in trend.columns else pd.NA
+
+    auto_mode = "Recomp"
+    auto_reason = []
+
+    # Basic heuristics (tweak as you like)
+    if pd.notna(latest_bf) and latest_bf >= 20:
+        auto_mode = "Cut"
+        auto_reason.append("Body fat is in a higher zone (≥ ~20%).")
+    elif pd.notna(latest_bf) and latest_bf <= 15:
+        auto_mode = "Bulk"
+        auto_reason.append("Body fat is in a leaner zone (≤ ~15%).")
+    else:
+        auto_mode = "Recomp"
+        auto_reason.append("Body fat is in the middle zone (15–20%).")
+
+    # Lean trend tie-breaker
+    if pd.notna(d_lean):
+        if d_lean < -0.25:
+            auto_reason.append("Lean trend is down over the window → prioritize recovery/protein and avoid aggressive cuts.")
+            if auto_mode == "Cut":
+                auto_mode = "Recomp"
+        elif d_lean > 0.25:
+            auto_reason.append("Lean trend is up over the window → you’re in a productive zone.")
+
+    # Energy balance tie-breaker (if present)
+    if pd.notna(eb_avg):
+        if eb_avg > 200 and auto_mode == "Cut":
+            auto_reason.append("Average balance is strongly positive → a cut would likely require dialing intake down.")
+        if eb_avg < -200 and auto_mode == "Bulk":
+            auto_reason.append("Average balance is strongly negative → a bulk would likely require dialing intake up.")
+
+    # Decide applied mode
+    mode = auto_mode if goal == "Auto (suggest)" else goal
+
+    if goal == "Auto (suggest)":
+        st.caption(f"**Auto suggestion:** {auto_mode}  •  " + " ".join(auto_reason))
+
+    # --- KPI colouring rules by mode ---
+    def tone_for_energy(balance):
+        if pd.isna(balance):
+            return "neutral"
+        if mode == "Cut":
+            return "good" if balance < 0 else "bad"
+        if mode == "Bulk":
+            return "good" if balance > 0 else "bad"
+        # Recomp: near 0 is good
+        return "good" if abs(balance) <= 150 else "warn"
+
+    def tone_for_lean(x):
+        if pd.isna(x):
+            return "neutral"
+        # Lean up is generally good across phases, but huge jumps can be water/glycogen
+        return "good" if x > 0 else ("warn" if x == 0 else "bad")
+
+    def tone_for_fat(x):
+        if pd.isna(x):
+            return "neutral"
+        if mode == "Cut":
+            return "good" if x < 0 else "bad"
+        if mode == "Bulk":
+            # small fat gain is acceptable; big gain is not
+            return "good" if x <= 0.5 else ("warn" if x <= 1.5 else "bad")
+        # Recomp
+        return "good" if x <= 0 else ("warn" if x <= 0.75 else "bad")
+
+    # --- Display cards ---
+    k1, k2, k3, k4 = st.columns(4)
+
+    with k1:
+        kpi_card(
+            f"Lean Δ ({lookback_weeks}w)",
+            "—" if pd.isna(d_lean) else f"{d_lean:+.2f} lb",
+            tone=tone_for_lean(d_lean),
+            help_text="Positive is usually a good sign (but small swings can be water/glycogen).",
+        )
+
+    with k2:
+        kpi_card(
+            f"Fat Δ ({lookback_weeks}w)",
+            "—" if pd.isna(d_fat) else f"{d_fat:+.2f} lb",
+            tone=tone_for_fat(d_fat),
+            help_text="Interpreted relative to your selected goal mode.",
+        )
+
+    with k3:
+        kpi_card(
+            f"Weight Δ ({lookback_weeks}w)",
+            "—" if pd.isna(d_weight) else f"{d_weight:+.2f} lb",
+            tone="neutral",
+            help_text="Use together with Lean/Fat deltas for context.",
+        )
+
+    with k4:
+        kpi_card(
+            f"Avg energy balance ({lookback_weeks}w)",
+            "—" if pd.isna(eb_avg) else f"{eb_avg:+.0f} kcal/day",
+            tone=tone_for_energy(eb_avg),
+            help_text="Calories − expenditure (weekly averages).",
+        )
+
+    # Optional: show BF level + change
+    b1, b2 = st.columns(2)
+    with b1:
+        kpi_card("Body fat % (latest)", "—" if pd.isna(latest_bf) else f"{latest_bf:.1f}%", tone="neutral")
+    with b2:
+        kpi_card(f"Body fat Δ ({lookback_weeks}w)", "—" if pd.isna(d_bf) else f"{d_bf:+.2f}%", tone="neutral")
+
 
 # ============================================================
 # Food patterns
