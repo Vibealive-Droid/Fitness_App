@@ -44,7 +44,7 @@ WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
 WS_TRAIN_WEEKLY = "Weekly_Training"
 
-# Optional sources (used for "This week so far" + debug)
+# Optional sources (used for "This week so far")
 WS_DAILY_ENERGY = "Daily_Energy"
 WS_WORKOUT_LOG = "Staging_Workout_Log"
 
@@ -572,12 +572,6 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
 # ============================================================
-# Debug toggles
-# ============================================================
-with st.expander("🛠 Debug", expanded=False):
-    debug_on = st.checkbox("Show debug tables + computed metrics", value=False)
-
-# ============================================================
 # This week so far (ALWAYS current week: Monday -> today)
 # ============================================================
 st.subheader("This week so far")
@@ -708,49 +702,6 @@ if not workout_week.empty and ("workout_duration" in workout_week.columns) and (
         st.metric("Sets/hour", metric_or_dash(sets_per_hour, "{:.1f}"))
 else:
     st.caption("No workout log rows for this week yet.")
-
-
-# ============================================================
-# Debug: last week (Mon–Sun)
-# ============================================================
-if debug_on:
-    last_week_start = (this_monday - pd.Timedelta(days=7)).date()
-    last_week_end = (this_monday - pd.Timedelta(days=1)).date()
-    st.caption(f"Debug (last week Mon–Sun): {last_week_start} → {last_week_end}")
-
-    de_last = filter_range(daily_energy, last_week_start, last_week_end, "date")
-    wl_last = filter_range(workout_log, last_week_start, last_week_end, "date")
-
-    st.subheader("Daily_Energy (last week)")
-    st.dataframe(date_for_table(de_last), hide_index=True)
-
-    st.subheader("Staging_Workout_Log (last week)")
-    st.dataframe(date_for_table(wl_last), hide_index=True)
-
-    # show computed metrics for last week as a sanity check
-    logged_last = pick_logged_days(de_last)
-    st.subheader("Computed metrics (last week)")
-
-    d1, d2, d3, d4 = st.columns(4)
-    if not logged_last.empty:
-        avg_cals = logged_last["calories"].mean() if "calories" in logged_last.columns else pd.NA
-        avg_exp = logged_last["expenditure"].mean() if "expenditure" in logged_last.columns else pd.NA
-        avg_steps = logged_last["steps"].mean() if "steps" in logged_last.columns else pd.NA
-        avg_p = logged_last["protein_adherence"].mean() if "protein_adherence" in logged_last.columns else pd.NA
-        avg_e = logged_last["energy_adherence"].mean() if "energy_adherence" in logged_last.columns else pd.NA
-
-        with d1:
-            st.metric("Days logged", int(len(logged_last)))
-        with d2:
-            st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
-            st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
-        with d3:
-            st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
-        with d4:
-            st.metric("Protein adherence", metric_or_dash(avg_p * 100 if pd.notna(avg_p) else pd.NA, "{:.0f}%"))
-            st.metric("Energy adherence", metric_or_dash(avg_e * 100 if pd.notna(avg_e) else pd.NA, "{:.0f}%"))
-    else:
-        st.info("No logged days detected last week (days_logged_flag=0 AND calories/macros are 0).")
 
 # ============================================================
 # Combined table (weekly)
