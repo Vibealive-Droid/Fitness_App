@@ -1,7 +1,7 @@
 import altair as alt
 import streamlit as st
 import pandas as pd
-import gspread
+import gspreado
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Body Composition Tracker", layout="wide")
@@ -219,15 +219,152 @@ with colB:
     )
 
 with colC:
+# ----------------------------
+# Date range selector (Monday weeks + presets, bulletproof)
+# ----------------------------
+st.subheader("Date range")
+
+if body.empty:
+    st.info("No body data yet.")
+    st.stop()
+
+def monday_of(d: pd.Timestamp) -> pd.Timestamp:
+    d = pd.to_datetime(d).normalize()
+    return d - pd.to_timedelta(d.weekday(), unit="D")
+
+def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
+    return monday_of(d) + pd.Timedelta(days=6)
+
+min_date = body["date"].min().date()
+max_body_date = body["date"].max().date()
+
+today = pd.Timestamp.today().normalize()
+this_monday = monday_of(today)
+
+colA, colB, colC, colD = st.columns([1.4, 1, 1, 2])
+
+with colD:
+    include_report_monday = st.checkbox(
+        "Include current week (report Monday)",
+        value=st.session_state.get("include_report_monday", True),
+        help="Weekly Energy/Training rows are stamped on the next Monday. Enable to include that row in filters/charts.",
+        key="include_report_monday",
+    )
+
+# max date allowed in picker depends on checkbox
+max_end_allowed = max_body_date
+if include_report_monday:
+    max_end_allowed = (pd.Timestamp(max_body_date) + pd.Timedelta(days=7)).date()
+
+with colA:
+    preset = st.selectbox(
+        "Quick range",
+        [
+            "Last week (Mon–Sun)",
+            "Last 4 weeks",
+            "Last 12 weeks",
+            "Last month (calendar)",
+            "Last 3 months (calendar)",
+            "Last year (rolling 365d)",
+            "Year-to-date",
+            "Custom",
+        ],
+        index=st.session_state.get("preset_idx", 0),
+        key="preset_range",
+    )
+
+def compute_preset(preset_name: str):
+    if preset_name == "Last week (Mon–Sun)":
+        end = this_monday - pd.Timedelta(days=1)  # last Sunday
+        start = end - pd.Timedelta(days=6)        # last Monday
+        return start.date(), end.date()
+
+    if preset_name == "Last 4 weeks":
+        end = this_monday - pd.Timedelta(days=1)
+        start = end - pd.Timedelta(days=27)
+        return monday_of(start).date(), end.date()
+
+    if preset_name == "Last 12 weeks":
+        end = this_monday - pd.Timedelta(days=1)
+        start = end - pd.Timedelta(days=83)
+        return monday_of(start).date(), end.date()
+
+    if preset_name == "Last month (calendar)":
+        first_this_month = pd.Timestamp(today.year, today.month, 1)
+        last_month_end = first_this_month - pd.Timedelta(days=1)
+        last_month_start = pd.Timestamp(last_month_end.year, last_month_end.month, 1)
+        return last_month_start.date(), last_month_end.date()
+
+    if preset_name == "Last 3 months (calendar)":
+        first_this_month = pd.Timestamp(today.year, today.month, 1)
+        end = first_this_month - pd.Timedelta(days=1)  # end of last month
+        start_month = (first_this_month - pd.DateOffset(months=3)).normalize()
+        start = pd.Timestamp(start_month.year, start_month.month, 1)
+        return start.date(), end.date()
+
+    if preset_name == "Last year (rolling 365d)":
+        end = today
+        start = today - pd.Timedelta(days=365)
+        return start.date(), end.date()
+
+    if preset_name == "Year-to-date":
+        start = pd.Timestamp(today.year, 1, 1)
+        end = today
+        return start.date(), end.date()
+
+    # Custom fallback
+    end = max_body_date
+    start = max(min_date, (pd.Timestamp(end) - pd.DateOffset(months=12)).date())
+    return start, end
+
+preset_start, preset_end = compute_preset(preset)
+
+# ---- CLAMP preset values so they never exceed widget constraints ----
+preset_start = max(min_date, min(preset_start, max_end_allowed))
+preset_end = max(min_date, min(preset_end, max_end_allowed))
+if preset_start > preset_end:
+    preset_start = preset_end
+
+# ---- CLAMP existing session_state values BEFORE rendering widgets ----
+# This prevents StreamlitAPIException when max_end_allowed shrinks.
+if "start_date" in st.session_state and st.session_state["start_date"] is not None:
+    if st.session_state["start_date"] > max_end_allowed:
+        st.session_state["start_date"] = max_end_allowed
+    if st.session_state["start_date"] < min_date:
+        st.session_state["start_date"] = min_date
+
+if "end_date" in st.session_state and st.session_state["end_date"] is not None:
+    if st.session_state["end_date"] > max_end_allowed:
+        st.session_state["end_date"] = max_end_allowed
+    if st.session_state["end_date"] < min_date:
+        st.session_state["end_date"] = min_date
+
+# For non-custom presets, we force the widget values to the preset range.
+if preset != "Custom":
+    st.session_state["start_date"] = preset_start
+    st.session_state["end_date"] = preset_end
+
+with colB:
+    start_date = st.date_input(
+        "Start date",
+        value=st.session_state.get("start_date", preset_start),
+        min_value=min_date,
+        max_value=max_end_allowed,
+        key="start_date",
+        disabled=(preset != "Custom"),
+    )
+
+with colC:
     end_date = st.date_input(
         "End date",
-        value=preset_end,
+        value=st.session_state.get("end_date", preset_end),
         min_value=min_date,
         max_value=max_end_allowed,
         key="end_date",
         disabled=(preset != "Custom"),
     )
 
+# Final safety
 if start_date is None or end_date is None:
     st.warning("Please select both a start and end date.")
     st.stop()
@@ -237,22 +374,18 @@ if start_date > end_date:
     st.stop()
 
 # Snap to Monday-week boundaries
-start_dt = pd.Timestamp(start_date)
-end_dt = pd.Timestamp(end_date)
-
-start_dt_monday = monday_of(start_dt)
-end_dt_sunday = sunday_of_week(end_dt)
+start_dt_monday = monday_of(pd.Timestamp(start_date))
+end_dt_sunday = sunday_of_week(pd.Timestamp(end_date))
 
 start_date = start_dt_monday.date()
 end_date = end_dt_sunday.date()
 
-# Report-Monday inclusion (extends filter window so stamped weekly row shows up)
+# Report-Monday inclusion (used for weekly filtering)
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
 st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
-
 # ----------------------------
 # Load weekly ENERGY
 # ----------------------------
@@ -876,6 +1009,7 @@ st.caption("These inputs are not saved yet. If you want, we can add a Daily_Note
 sleep_hours = st.number_input("Sleep hours (today)", min_value=0.0, max_value=24.0, value=0.0, step=0.25)
 mood = st.selectbox("Mood (optional)", ["", "Great", "Good", "OK", "Low", "Rough"])
 note = st.text_input("Quick note (optional)", value="")
+
 
 
 
