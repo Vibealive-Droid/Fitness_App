@@ -559,6 +559,9 @@ week_start_dt = monday_of(today)   # Monday
 week_start = week_start_dt.date()
 week_end = today.date()
 
+st.caption(f"Current week window: {week_start} → {week_end}")
+
+# --- Load Daily Energy (once) ---
 daily_energy = load_sheet(WS_DAILY_ENERGY)
 daily_energy = normalise_daily_energy_schema(daily_energy)
 daily_energy = normalise_date_col(daily_energy, "date")
@@ -573,8 +576,8 @@ daily_energy = to_num(daily_energy, [
 ])
 
 daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
-daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
+# --- Load Workout Log (once) ---
 workout_log = load_sheet(WS_WORKOUT_LOG)
 workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
@@ -582,9 +585,14 @@ workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir
 
 workout_week = filter_range(workout_log, week_start, week_end, "date")
 
+# ============================================================
+# Metrics cards
+# ============================================================
 c1, c2, c3, c4 = st.columns(4)
 
+# ------------------------------------------------------------
 # Energy so far this week (split: nutrition vs activity)
+# ------------------------------------------------------------
 de = daily_energy_week.copy()
 
 # Nutrition-logged days (for calories + adherence)
@@ -628,18 +636,21 @@ with c3:
 with c4:
     st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
     st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
-# Friendly message if calories/macros weren’t logged but activity exists
-if nutrition.empty and not activity_days.empty:
-    st.info("No nutrition was logged this week yet (calories/macros are 0), but activity data (expenditure/steps) is available.")
 
+# Friendly message if calories/macros weren’t logged but activity exists
+if nutrition.empty and not activity.empty:
+    st.info("No nutrition logged yet this week, but activity data (expenditure/steps) is available.")
+
+# ------------------------------------------------------------
 # Training so far this week (unique sessions)
+# ------------------------------------------------------------
 if not workout_week.empty and ("workout_duration" in workout_week.columns) and ("workout" in workout_week.columns):
     wk = workout_week.copy()
 
-    # unique session key by day + workout name
+    # Unique session key by day + workout name
     wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
 
-    # workout_duration looks like seconds in your screenshot; convert to minutes
+    # workout_duration is seconds -> minutes
     session_minutes = wk.groupby("session_key")["workout_duration"].max() / 60.0
     minutes_total = float(session_minutes.sum())
     workouts_completed = int(session_minutes.shape[0])
@@ -669,6 +680,7 @@ if not workout_week.empty and ("workout_duration" in workout_week.columns) and (
         st.metric("Sets/hour", metric_or_dash(sets_per_hour, "{:.1f}"))
 else:
     st.caption("No workout log rows for this week yet.")
+
 
 # ============================================================
 # Debug: last week (Mon–Sun)
