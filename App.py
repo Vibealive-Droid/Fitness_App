@@ -644,10 +644,15 @@ if not sc.empty:
     ).properties(height=300)
     st.altair_chart(scatter, use_container_width=True)
 
-# D) Adherence dashboard
+# D) Adherence dashboard (PERCENT SCALE)
 st.subheader("Adherence (weekly)")
-has_adh = (("protein_adherence_avg" in combined.columns and safe_num(combined["protein_adherence_avg"]).notna().any()) or
-           ("energy_adherence_avg" in combined.columns and safe_num(combined["energy_adherence_avg"]).notna().any()))
+
+has_adh = (
+    ("protein_adherence_avg" in combined.columns and safe_num(combined["protein_adherence_avg"]).notna().any())
+    or
+    ("energy_adherence_avg" in combined.columns and safe_num(combined["energy_adherence_avg"]).notna().any())
+)
+
 if has_adh:
     adh = combined[["date"]].copy()
     adh["date"] = pd.to_datetime(adh["date"], errors="coerce")
@@ -659,24 +664,40 @@ if has_adh:
 
     adh_m = adh.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
 
+    # Convert ratio -> percent for chart display
     if not adh_m.empty:
+        adh_m = adh_m.copy()
+        adh_m["value_pct"] = adh_m["value"] * 100
+
         adh_chart = alt.Chart(adh_m).mark_line(interpolate="monotone", point=True).encode(
             x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="Adherence (ratio)", scale=alt.Scale(domain=[0, 2])),
+            y=alt.Y(
+                "value_pct:Q",
+                title="Adherence (%)",
+                scale=alt.Scale(domain=[80, 120], clamp=True)  # adjust if you want wider/narrower
+            ),
             color=alt.Color("metric:N", title=""),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".3f")]
+            tooltip=[
+                alt.Tooltip("date:T", title="Week"),
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("value_pct:Q", title="Adherence (%)", format=".0f"),
+            ],
         ).properties(height=260)
+
         st.altair_chart(adh_chart, use_container_width=True)
 
+    # Keep threshold logic in ratio space (0.9 = 90%)
     p_ok = (combined["protein_adherence_avg"] >= 0.9).mean() if "protein_adherence_avg" in combined.columns else pd.NA
     e_ok = (combined["energy_adherence_avg"] >= 0.9).mean() if "energy_adherence_avg" in combined.columns else pd.NA
+
     a1, a2 = st.columns(2)
     with a1:
-        st.metric("% weeks protein ≥ 0.9", f"{p_ok*100:.0f}%" if pd.notna(p_ok) else "—")
+        st.metric("% weeks protein ≥ 90%", f"{p_ok*100:.0f}%" if pd.notna(p_ok) else "—")
     with a2:
-        st.metric("% weeks energy ≥ 0.9", f"{e_ok*100:.0f}%" if pd.notna(e_ok) else "—")
+        st.metric("% weeks energy ≥ 90%", f"{e_ok*100:.0f}%" if pd.notna(e_ok) else "—")
 else:
     st.caption("No adherence data yet.")
+
 
 # E) Lean vs Fat change decomposition
 st.subheader("Lean vs Fat change (weekly)")
