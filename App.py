@@ -34,7 +34,7 @@ WS_TRAIN_WEEKLY = "Weekly_Training"
 WS_DAILY_ENERGY = "Daily_Energy"
 WS_WORKOUT_LOG = "Staging_Workout_Log"
 
-# Your current "Food Log" staging (it is actually a daily summary, not meal-level)
+# Food log staging
 WS_FOOD_LOG = "Staging_MacroFactor_FoodLog"
 
 # ----------------------------
@@ -92,7 +92,15 @@ def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
 
+# ----------------------------
+# Week helpers (Monday week)
+# ----------------------------
+def monday_of(d: pd.Timestamp) -> pd.Timestamp:
+    d = pd.to_datetime(d).normalize()
+    return d - pd.to_timedelta(d.weekday(), unit="D")
 
+def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
+    return monday_of(d) + pd.Timedelta(days=6)
 
 # ----------------------------
 # Load BODY weekly
@@ -108,7 +116,7 @@ if not body.empty:
     body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
 
 # ----------------------------
-# Date range selector (bulletproof + allows "report Monday")
+# Date range selector (Monday weeks + presets, bulletproof)
 # ----------------------------
 st.subheader("Date range")
 
@@ -118,11 +126,14 @@ if body.empty:
 
 min_date = body["date"].min().date()
 max_body_date = body["date"].max().date()
-default_start = max(min_date, (pd.Timestamp(max_body_date) - pd.DateOffset(months=12)).date())
 
-col1, col2, col3 = st.columns([1, 1, 2])
+today = pd.Timestamp.today().normalize()
+this_monday = monday_of(today)
 
-with col3:
+# Allow selecting past last body date if include_report_monday is enabled
+colA, colB, colC, colD = st.columns([1.4, 1, 1, 2])
+
+with colD:
     include_report_monday = st.checkbox(
         "Include current week (report Monday)",
         value=True,
@@ -130,27 +141,91 @@ with col3:
         key="include_report_monday",
     )
 
-# allow selecting past last body date if include_report_monday is enabled
 max_end_allowed = max_body_date
 if include_report_monday:
     max_end_allowed = (pd.Timestamp(max_body_date) + pd.Timedelta(days=7)).date()
 
-with col1:
+with colA:
+    preset = st.selectbox(
+        "Quick range",
+        [
+            "Last week (Mon–Sun)",
+            "Last 4 weeks",
+            "Last 12 weeks",
+            "Last month (calendar)",
+            "Last 3 months (calendar)",
+            "Last year (rolling 365d)",
+            "Year-to-date",
+            "Custom",
+        ],
+        index=0,
+        key="preset_range",
+    )
+
+def compute_preset(preset_name: str):
+    if preset_name == "Last week (Mon–Sun)":
+        end = this_monday - pd.Timedelta(days=1)  # last Sunday
+        start = end - pd.Timedelta(days=6)        # last Monday
+        return start.date(), end.date()
+
+    if preset_name == "Last 4 weeks":
+        end = this_monday - pd.Timedelta(days=1)
+        start = end - pd.Timedelta(days=27)
+        return monday_of(start).date(), end.date()
+
+    if preset_name == "Last 12 weeks":
+        end = this_monday - pd.Timedelta(days=1)
+        start = end - pd.Timedelta(days=83)
+        return monday_of(start).date(), end.date()
+
+    if preset_name == "Last month (calendar)":
+        first_this_month = pd.Timestamp(today.year, today.month, 1)
+        last_month_end = first_this_month - pd.Timedelta(days=1)
+        last_month_start = pd.Timestamp(last_month_end.year, last_month_end.month, 1)
+        return last_month_start.date(), last_month_end.date()
+
+    if preset_name == "Last 3 months (calendar)":
+        first_this_month = pd.Timestamp(today.year, today.month, 1)
+        end = first_this_month - pd.Timedelta(days=1)  # end of last month
+        start_month = (first_this_month - pd.DateOffset(months=3)).normalize()
+        start = pd.Timestamp(start_month.year, start_month.month, 1)
+        return start.date(), end.date()
+
+    if preset_name == "Last year (rolling 365d)":
+        end = today
+        start = today - pd.Timedelta(days=365)
+        return start.date(), end.date()
+
+    if preset_name == "Year-to-date":
+        start = pd.Timestamp(today.year, 1, 1)
+        end = today
+        return start.date(), end.date()
+
+    # Custom fallback (12 months based on data)
+    end = max_body_date
+    start = max(min_date, (pd.Timestamp(end) - pd.DateOffset(months=12)).date())
+    return start, end
+
+preset_start, preset_end = compute_preset(preset)
+
+with colB:
     start_date = st.date_input(
         "Start date",
-        value=default_start,
+        value=preset_start,
         min_value=min_date,
         max_value=max_end_allowed,
         key="start_date",
+        disabled=(preset != "Custom"),
     )
 
-with col2:
+with colC:
     end_date = st.date_input(
         "End date",
-        value=max_body_date,
+        value=preset_end,
         min_value=min_date,
         max_value=max_end_allowed,
         key="end_date",
+        disabled=(preset != "Custom"),
     )
 
 if start_date is None or end_date is None:
@@ -161,10 +236,22 @@ if start_date > end_date:
     st.error("Start date must be before end date.")
     st.stop()
 
-# what we actually use to filter weekly tables
+# Snap to Monday-week boundaries
+start_dt = pd.Timestamp(start_date)
+end_dt = pd.Timestamp(end_date)
+
+start_dt_monday = monday_of(start_dt)
+end_dt_sunday = sunday_of_week(end_dt)
+
+start_date = start_dt_monday.date()
+end_date = end_dt_sunday.date()
+
+# Report-Monday inclusion (extends filter window so stamped weekly row shows up)
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
+
+st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
 
 # ----------------------------
 # Load weekly ENERGY
@@ -201,7 +288,7 @@ body_view = filter_range(body, start_date, end_date_for_weekly, "date")
 energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
 train_view = filter_range(train, start_date, end_date_for_weekly, "date")
 
-# X bounds: use requested window (not just body availability)
+# X bounds: use requested window
 x_min = pd.Timestamp(start_date)
 x_max = pd.Timestamp(end_date_for_weekly)
 
@@ -256,17 +343,14 @@ if not body_view.empty:
             padding={"left": 10, "right": 10, "top": 10, "bottom": 40},
         )
     )
-
     st.altair_chart(weight_chart, use_container_width=True)
 else:
     st.info("No body data in the selected date range.")
-
 
 # ----------------------------
 # Body Fat % (Altair)
 # ----------------------------
 st.subheader("Body Fat %")
-
 if not body_view.empty:
     bf_df = body_view[["date", "body_fat"]].copy()
 
@@ -295,11 +379,9 @@ if not body_view.empty:
             padding={"left": 10, "right": 10, "top": 10, "bottom": 40},
         )
     )
-
     st.altair_chart(bf_chart, use_container_width=True)
 else:
     st.info("No data in the selected date range.")
-          
 
 # ============================================================
 # Energy + Training
@@ -336,7 +418,7 @@ if not train_view.empty:
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
-# Derived deltas (only meaningful when body exists)
+# Derived deltas
 if "weight" in combined.columns:
     combined["weight_change"] = safe_num(combined["weight"]).diff()
 if "lean_mass" in combined.columns:
@@ -344,9 +426,12 @@ if "lean_mass" in combined.columns:
 if "fat_mass" in combined.columns:
     combined["fat_change"] = safe_num(combined["fat_mass"]).diff()
 
-# Energy balance (weekly avg kcal/day)
+# Energy balance
 if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
     combined["energy_balance"] = safe_num(combined["avg_calories"]) - safe_num(combined["avg_expenditure"])
+
+# ... keep the rest of your code below as-is ...
+
 
 # Training efficiency metrics
 if "training_minutes_total" in combined.columns and "sets_total" in combined.columns:
@@ -791,6 +876,7 @@ st.caption("These inputs are not saved yet. If you want, we can add a Daily_Note
 sleep_hours = st.number_input("Sleep hours (today)", min_value=0.0, max_value=24.0, value=0.0, step=0.25)
 mood = st.selectbox("Mood (optional)", ["", "Great", "Good", "OK", "Low", "Rough"])
 note = st.text_input("Quick note (optional)", value="")
+
 
 
 
