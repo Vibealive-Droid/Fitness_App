@@ -1009,7 +1009,7 @@ else:
     st.caption("No training metric available yet (volume_total / sets_total / training_minutes_total).")
 
 # ============================================================
-# Food patterns
+# Food patterns + Micronutrients
 # ============================================================
 st.header("🍽️ Food patterns")
 
@@ -1020,6 +1020,8 @@ if food.empty:
 else:
     food = food.copy()
 
+    # Accept BOTH: your staging schema OR MacroFactor raw export schema
+    # (raw export from MacroFactor XLSX has these names)
     staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
     raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
 
@@ -1030,6 +1032,9 @@ else:
             "carbs_g": "carbs",
             "fat_g": "fat",
         })
+        # OPTIONAL staging micros (only if you decide to include them in your staging sheet)
+        # expected staging names (if present):
+        # fiber_g, sodium_mg, potassium_mg, caffeine_mg
     elif raw_cols.issubset(set(food.columns)):
         food = food.rename(columns={
             "Date": "date",
@@ -1039,13 +1044,19 @@ else:
             "Protein (g)": "protein",
             "Carbs (g)": "carbs",
             "Fat (g)": "fat",
+            # raw micros (MacroFactor export)
+            "Fiber (g)": "fiber_g",
+            "Sodium (mg)": "sodium_mg",
+            "Potassium (mg)": "potassium_mg",
+            "Caffeine (mg)": "caffeine_mg",
         })
     else:
         st.error(f"Food log columns not recognized. Columns found: {list(food.columns)}")
         st.stop()
 
     food = normalise_date_col(food, "date")
-    for c in ["calories", "protein", "carbs", "fat"]:
+
+    for c in ["calories", "protein", "carbs", "fat", "fiber_g", "sodium_mg", "potassium_mg", "caffeine_mg"]:
         if c in food.columns:
             food[c] = pd.to_numeric(food[c], errors="coerce")
 
@@ -1053,6 +1064,65 @@ else:
         food["food_name"] = food["food_name"].astype(str).str.strip()
 
     food_view = filter_range(food, start_date, end_date_for_weekly, "date")
+    # ============================================================
+    # 🧂 Micronutrients + Quality flags (THIS WEEK SO FAR)
+    # Pull from food log (because Daily_Energy doesn't have micros)
+    # ============================================================
+    st.header("🧂 Micronutrients + Quality flags")
+
+    # Reuse your "this week so far" window
+    today = pd.Timestamp.today().normalize()
+    week_start_dt = monday_of(today)
+    week_start = week_start_dt.date()
+    week_end = today.date()
+
+    food_week = filter_range(food, week_start, week_end, "date")
+
+    # Pick columns if present (supports either staging names or raw export names)
+    fiber_col = coalesce_col(food_week, ["fiber_g", "Fiber (g)", "Fiber", "Fibre (g)", "Fibre"])
+    sodium_col = coalesce_col(food_week, ["sodium_mg", "Sodium (mg)", "Sodium"])
+    potassium_col = coalesce_col(food_week, ["potassium_mg", "Potassium (mg)", "Potassium"])
+    caffeine_col = coalesce_col(food_week, ["caffeine_mg", "Caffeine (mg)", "Caffeine"])
+
+    # Daily totals (sum foods per day), then average per day
+    def daily_avg(colname: str | None):
+        if food_week.empty or colname is None:
+            return pd.NA
+        daily = food_week.groupby("date", as_index=False)[colname].sum(numeric_only=True)
+        return pd.to_numeric(daily[colname], errors="coerce").mean()
+
+    fibre_avg = daily_avg(fiber_col)
+    sodium_avg = daily_avg(sodium_col)
+    potassium_avg = daily_avg(potassium_col)
+    caffeine_avg = daily_avg(caffeine_col)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Fibre (avg/day)", metric_or_dash(fibre_avg, "{:.1f} g"))
+    with m2:
+        st.metric("Sodium (avg/day)", metric_or_dash(sodium_avg, "{:.0f} mg"))
+    with m3:
+        st.metric("Potassium (avg/day)", metric_or_dash(potassium_avg, "{:.0f} mg"))
+    with m4:
+        st.metric("Caffeine (avg/day)", metric_or_dash(caffeine_avg, "{:.0f} mg"))
+
+    # Quality flag rules (you can tune these)
+    rules = [
+        {"metric": "Fibre", "avg_per_day": fibre_avg, "rule": "Flag if < 25 g", "flag": (pd.notna(fibre_avg) and float(fibre_avg) < 25)},
+        {"metric": "Sodium", "avg_per_day": sodium_avg, "rule": "Flag if > 2500 mg", "flag": (pd.notna(sodium_avg) and float(sodium_avg) > 2500)},
+        {"metric": "Potassium", "avg_per_day": potassium_avg, "rule": "Flag if < 3000 mg", "flag": (pd.notna(potassium_avg) and float(potassium_avg) < 3000)},
+        {"metric": "Caffeine", "avg_per_day": caffeine_avg, "rule": "Flag if > 400 mg", "flag": (pd.notna(caffeine_avg) and float(caffeine_avg) > 400)},
+    ]
+    flags_df = pd.DataFrame(rules)
+
+    st.subheader("Quality flags (this week so far)")
+    st.dataframe(
+        flags_df.assign(
+            avg_per_day=flags_df["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)
+        ),
+        hide_index=True
+    )
+
     if food_view.empty:
         st.caption("No food rows in the selected date range.")
     else:
