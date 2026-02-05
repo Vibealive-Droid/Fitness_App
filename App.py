@@ -1124,13 +1124,3 @@ else:
                 .properties(height=260)
             )
             st.altair_chart(macro_chart, use_container_width=True)
-
-# ============================================================
-# Manual inputs (starter UI)
-# ============================================================
-st.header("📝 Manual inputs (starter)")
-st.caption("These inputs are not saved yet. If you want, we can add a Daily_Notes tab + write-back.")
-
-sleep_hours = st.number_input("Sleep hours (today)", min_value=0.0, max_value=24.0, value=0.0, step=0.25)
-mood = st.selectbox("Mood (optional)", ["", "Great", "Good", "OK", "Low", "Rough"])
-note = st.text_input("Quick note (optional)", value="")
