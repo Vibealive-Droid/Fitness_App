@@ -1,1291 +1,1944 @@
-import altair as alt
-import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+/*******************************************************
+ * GrindWorks Body Comp + MacroFactor (Energy + Training + Food)
+ *
+ * REQUIREMENTS
+ * - Advanced Google Services: Drive API enabled (for Drive.Files.copy)
+ * - Sheets that must exist (names must match CONFIG):
+ *   Staging_Renpho
+ *   Weekly_BodyComp
+ *   Daily_Energy
+ *   Weekly_Energy
+ *   Exercise_Muscle_Map
+ *   Staging_Workout_Log
+ *   Staging_Muscle_Sets
+ *   Staging_Muscle_Volume
+ *   Weekly_Training
+ *   Staging_MacroFactor_FoodLog   (10 columns, incl Serving Size)
+ *
+ * Exercise_Muscle_Map columns (row 1):
+ * exercise | muscle_primary | muscle_secondary | muscle_tertiary |
+ * secondary_weight | tertiary_weight | include_for_sets | include_for_volume | notes
+ *
+ * Muscle names (use exactly):
+ * chest, back, legs, shoulders, biceps, triceps
+ *
+ * NOTE (Weekly_Training):
+ * This script writes 8 columns:
+ * date | sets_total | volume_total | workouts_completed | avg_RIR |
+ * muscle_groups_hit_count | training_minutes_total | avg_workout_minutes
+ *******************************************************/
 
-# ============================================================
-# Config: chart scales (edit here)
-# ============================================================
-WEIGHT_DOMAIN = [145, 225]
-BODYFAT_DOMAIN = [5, 30]
+// ===============================
+// CONFIG
+// ===============================
 
-CALORIES_DOMAIN = [1000, 5000]       # Calories vs Expenditure scale
-LEAN_DOMAIN = [150, 220]             # Lean mass scale
-VOLUME_DOMAIN = [70000, 90000]       # Training volume scale (lbs·reps)
-ADH_PCT_DOMAIN = [50, 130]           # Adherence % scale (set to [0, 120] if you prefer)
+// Renpho folders
+const RENPHO_INBOX_FOLDER_ID     = "1C7zJ6_RrAM6yDcl2Vs3ZKEB2CSTfHESR";
+const RENPHO_PROCESSED_FOLDER_ID = "11tk6omigItgdAbSR4Rrm46biDW1I1WsJ";
 
-# ============================================================
-# Streamlit page setup
-# ============================================================
-st.set_page_config(page_title="Body Composition Tracker", layout="wide")
-st.title("📊 Body Composition Tracker")
+// MacroFactor folders
+const MF_INBOX_FOLDER_ID         = "1a6MlRckc6G5JzIL5QYfcODihqIV75WCC";
+const MF_PROCESSED_FOLDER_ID     = "17pAZyHudFfmQE0lDZtQD5RfTMWtpyj_g";
 
-# ============================================================
-# Google Sheets setup
-# ============================================================
-SHEET_ID = st.secrets["SHEET_ID"]
+// Sheets
+const STAGING_RENPHO_SHEET_NAME = "Staging_Renpho";
+const WEEKLY_BODYCOMP_SHEET     = "Weekly_BodyComp";
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+const DAILY_ENERGY_SHEET        = "Daily_Energy";
+const WEEKLY_ENERGY_SHEET       = "Weekly_Energy";
 
-creds = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"],
-    scopes=SCOPES
-)
+const EXERCISE_MAP_SHEET        = "Exercise_Muscle_Map";
 
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_ID)
+const STAGING_WORKOUT_LOG_SHEET = "Staging_Workout_Log";
+const STAGING_MUSCLE_SETS_SHEET = "Staging_Muscle_Sets";
+const STAGING_MUSCLE_VOL_SHEET  = "Staging_Muscle_Volume";
+const WEEKLY_TRAINING_SHEET     = "Weekly_Training";
 
-# ✅ Tab names
-WS_BODY_WEEKLY = "Weekly_BodyComp"
-WS_ENERGY_WEEKLY = "Weekly_Energy"
-WS_TRAIN_WEEKLY = "Weekly_Training"
+const FOOD_LOG_SHEET_NAME       = "Staging_MacroFactor_FoodLog";
 
-# Optional sources (used for "This week so far")
-WS_DAILY_ENERGY = "Daily_Energy"
-WS_WORKOUT_LOG = "Staging_Workout_Log"
+// MacroFactor Food Log headers (exact from your export)
+const MF_FOOD_HEADERS = {
+  date: "Date",
+  time: "Time",
+  foodName: "Food Name",
+  servingSize: "Serving Size",
+  servingQty: "Serving Qty",
+  servingWeightG: "Serving Weight (g)",
+  calories: "Calories (kcal)",
+  fat: "Fat (g)",
+  carbs: "Carbs (g)",
+  protein: "Protein (g)",
+};
 
-# Food log staging
-WS_FOOD_LOG = "Staging_MacroFactor_FoodLog"
+// Renpho CSV/XLS headers (alias-based, robust)
+const RENPHO_HEADERS = {
+  date: ["Date", "Measurement Date", "Date (Local)"],
+  time: ["Time", "Measurement Time", "Time (Local)"],
+  weight: ["Weight(lb)", "Weight (lb)", "Weight"],
+  bodyFat: ["Body Fat(%)", "Body Fat %", "Body Fat"],
+  ffm: ["Fat-Free Mass(lb)", "Fat-Free Mass (lb)", "FFM(lb)", "FFM"],
+};
 
-# ============================================================
-# Helpers
-# ============================================================
-@st.cache_data(ttl=120, show_spinner=False)
-def _cached_get_all_records(_sheet_id: str, worksheet_name: str) -> list[dict]:
-    """Cache records for 2 minutes to reduce Sheets calls."""
-    try:
-        ws = sh.worksheet(worksheet_name)
-        rows = ws.get_all_records()
-        return rows if rows else []
-    except Exception:
-        return []
+// Old MacroFactor Quick Export headers (legacy)
+const MF_QE_HEADERS = {
+  date: "Date",
+  expenditure: "Expenditure",
+  trendWeight: "Trend Weight (lbs)",
+  weight: "Weight (lbs)",
+  calories: "Calories (kcal)",
+  protein: "Protein (g)",
+  carbs: "Carbs (g)",
+  fat: "Fat (g)",
+  targetCalories: "Target Calories (kcal)",
+  targetProtein: "Target Protein (g)",
+  targetCarbs: "Target Carbs (g)",
+  targetFat: "Target Fat (g)",
+  steps: "Steps",
+};
 
-def load_sheet(worksheet_name: str) -> pd.DataFrame:
-    """Safe loader: returns empty df if sheet missing/empty."""
-    rows = _cached_get_all_records(SHEET_ID, worksheet_name)
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+// Common MacroFactor sheet names (exact + fuzzy matching is also used)
+const MF_SHEETS_V2 = {
+  caloriesMacros: "Calories & Macros",
+  expenditure: "Expenditure",
+  weightTrend: "Weight Trend",
+  programSettings: "Nutrition Program Settings",
+  foodLog: "Food Log",
+  workoutLog: "Workout Log",
+  quickExport: "Quick Export", // legacy
+};
 
-def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
-    """Keep df[col] as datetime for filtering + Altair. Normalise to midnight."""
-    if df.empty or col not in df.columns:
-        return df
-    df = df.copy()
-    df[col] = pd.to_datetime(df[col], errors="coerce").dt.normalize()
-    df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
-    return df
+// ===============================
+// MAIN ENTRYPOINTS
+// ===============================
 
-def align_to_monday(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
-    """Force weekly dates to Monday."""
-    if df.empty or col not in df.columns:
-        return df
-    df = df.copy()
-    df[col] = pd.to_datetime(df[col], errors="coerce").dt.normalize()
-    df[col] = df[col] - pd.to_timedelta(df[col].dt.weekday, unit="D")
-    df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
-    return df
+/**
+ * Normal run: process new files from inbox folders (Renpho + MF),
+ * then rebuild all derived tabs.
+ */
+function processNewFiles() {
+  // Renpho -> staging (moves files to processed)
+  processRenphoInbox_();
 
-def to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    df = df.copy()
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+  // MacroFactor (IMPORTANT ORDER)
+  processMacroFactorInboxToDailyEnergy_(); // 1) daily energy (does NOT move files)
+  processMacroFactorInboxToFoodLog_();     // 2) food log (does NOT move files)
+  processMacroFactorInboxToWorkoutLog_();  // 3) workout log (moves file to processed)
 
-def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
-    if df.empty or col not in df.columns:
-        return df
-    mask = (df[col].dt.date >= start_date) & (df[col].dt.date <= end_date)
-    return df.loc[mask].copy()
+  // Rebuild derived tables
+  rebuildWeeklyBodyComp_();
+  rebuildWeeklyEnergyFromDaily_();
 
-def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
-    """For table display only (clean YYYY-MM-DD)."""
-    if df.empty or col not in df.columns:
-        return df
-    out = df.copy()
-    out[col] = pd.to_datetime(out[col], errors="coerce").dt.date
-    return out
+  rebuildMuscleSets_();
+  rebuildMuscleVolume_();
+  rebuildWeeklyTraining_();
 
-def safe_num(series):
-    return pd.to_numeric(series, errors="coerce")
+  Logger.log("✅ Done: Renpho + MacroFactor processed; energy + training + food rebuilt.");
+}
 
-# ----------------------------
-# Week helpers (Monday week)
-# ----------------------------
-def monday_of(d: pd.Timestamp) -> pd.Timestamp:
-    d = pd.to_datetime(d).normalize()
-    return d - pd.to_timedelta(d.weekday(), unit="D")
+/**
+ * Full rebuild from ALL files (Inbox + Processed) for MacroFactor,
+ * and (optionally) Renpho if you want to add it in.
+ *
+ * NOTE: This version clears MF destination tabs only (as you had it),
+ * and rebuilds derived tables.
+ */
+function rebuildEverythingFromAllFiles() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
-    return monday_of(d) + pd.Timedelta(days=6)
+  // Clear destination/staging tabs (keep headers)
+  clearSheetButKeepHeader_(mustGetSheet_(ss, DAILY_ENERGY_SHEET));
+  clearSheetButKeepHeader_(mustGetSheet_(ss, FOOD_LOG_SHEET_NAME));
+  clearSheetButKeepHeader_(mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET));
 
-# ----------------------------
-# Schema normalisers
-# ----------------------------
-def normalise_daily_energy_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Daily_Energy columns (if variants exist) to the names the app expects."""
-    if df.empty:
-        return df
-    df = df.copy()
+  // Rebuild from ALL MF files (Processed first, then Inbox)
+  processMacroFactorAllFilesToDailyEnergy_();
+  processMacroFactorAllFilesToFoodLog_();
+  processMacroFactorAllFilesToWorkoutLog_();
 
-    rename_map = {
-        "logged": "days_logged_flag",
-        "Logged": "days_logged_flag",
+  // Rebuild derived tables
+  rebuildWeeklyBodyComp_();
+  rebuildWeeklyEnergyFromDaily_();
 
-        "calTarget": "calorie_target",
-        "Target Calories (kcal)": "calorie_target",
+  rebuildMuscleSets_();
+  rebuildMuscleVolume_();
+  rebuildWeeklyTraining_();
 
-        "protein": "protein_g",
-        "carbs": "carbs_g",
-        "fat": "fat_g",
+  Logger.log("✅ Full rebuild complete: ALL files (Inbox + Processed) ingested and tables rebuilt.");
+}
 
-        "proteinAdh": "protein_adherence",
-        "energyAdh": "energy_adherence",
+// ===============================
+// CORE HELPERS
+// ===============================
 
-        "trendW": "trend_weight_lb",
-        "Trend Weight (lbs)": "trend_weight_lb",
+function mustGetSheet_(ss, name) {
+  const sh = ss.getSheetByName(name);
+  if (!sh) throw new Error(`Sheet not found: ${name}`);
+  return sh;
+}
 
-        "scaleWeight": "scale_weight_lb",
-        "Scale Weight (lbs)": "scale_weight_lb",
+function clearSheetButKeepHeader_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getMaxColumns()).clearContent();
+  }
+}
+
+function round_(num, decimals) {
+  const p = Math.pow(10, decimals);
+  return Math.round(num * p) / p;
+}
+
+// ===============================
+// RENPHO (FIXED + CLEAN)
+// ===============================
+
+/**
+ * Renpho normal ingest:
+ * - Reads files from Renpho inbox
+ * - Appends rows to Staging_Renpho: [datetime, weight, bodyfat, ffm]
+ * - Moves successfully parsed files to processed
+ * - De-dupes by FILE ID via script properties
+ */
+function processRenphoInbox_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const staging = mustGetSheet_(ss, STAGING_RENPHO_SHEET_NAME);
+
+  const inbox = DriveApp.getFolderById(RENPHO_INBOX_FOLDER_ID);
+  const processed = DriveApp.getFolderById(RENPHO_PROCESSED_FOLDER_ID);
+
+  const seen = getProcessedRenphoIds_();
+
+  const files = inbox.getFiles();
+  let processedCount = 0;
+  let skippedCount = 0;
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const id = file.getId();
+
+    // ✅ dedupe by ID, not name
+    if (seen.has(id)) {
+      skippedCount++;
+      continue;
     }
 
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-    return df
+    try {
+      const rows = parseRenphoFileToRows_(file);
+      if (rows.length > 0) {
+        staging.getRange(staging.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+        appended += rows.length;
+      }
 
-def normalise_workout_log_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename Staging_Workout_Log columns (if variants exist) to names used by the app."""
-    if df.empty:
-        return df
-    df = df.copy()
+      // mark processed + move
+      seen.add(id);
+      processed.addFile(file);
+      inbox.removeFile(file);
+      processedCount++;
 
-    rename_map = {
-        "weight": "weight_lb",
-        "Weight (lbs)": "weight_lb",
-        "Reps": "reps",
-        "RIR": "rir",
-        "Workout Duration": "workout_duration",
-        "Set Type": "set_type",
+    } catch (e) {
+      Logger.log("❌ Failed on Renpho file: " + file.getName() + " | " + id);
+      Logger.log(e && e.stack ? e.stack : e);
+      // IMPORTANT: do NOT mark as processed if it failed
+    }
+  }
+
+  saveProcessedRenphoIds_(seen);
+  Logger.log(`Renpho: appended=${appended}, processed_files=${processedCount}, skipped_seen=${skippedCount}, seen_total=${seen.size}`);
+}
+
+/**
+ * Parse Renpho file into staging rows:
+ * Output rows: [ "YYYY-MM-DD HH:MM:SS", weight_lb, bodyfat_pct, ffm_lb ]
+ */
+function parseRenphoFileToRows_(file) {
+  const mime = file.getMimeType();
+  const name = String(file.getName() || "").toLowerCase();
+
+  let values;
+
+  // Excel -> convert to temp google sheet -> read values
+  if (
+    mime === MimeType.MICROSOFT_EXCEL ||
+    mime === "application/vnd.ms-excel" ||
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xls")
+  ) {
+    const sheetId = excelToTempSheet_(file.getId());
+    try {
+      const ss = SpreadsheetApp.openById(sheetId);
+      const ws = ss.getSheets()[0];
+      values = ws.getDataRange().getValues();
+    } finally {
+      try { DriveApp.getFileById(sheetId).setTrashed(true); } catch (e) {}
+    }
+  }
+  // CSV / text
+  else if (mime === MimeType.CSV || mime === MimeType.PLAIN_TEXT || name.endsWith(".csv")) {
+    const csv = file.getBlob().getDataAsString();
+    values = Utilities.parseCsv(csv);
+  } else {
+    throw new Error("Unsupported RENPHO mime: " + mime);
+  }
+
+  if (!values || values.length < 2) return [];
+
+  const header = values[0].map(h => String(h).trim());
+  const idx = headerIndexesRenpho_(header);
+
+  const out = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (!r || r.length === 0) continue;
+
+    const d = parseDateFlexible_(r[idx.date]);
+    if (!d) continue;
+
+    const timeStr = String(r[idx.time] ?? "").trim();
+    if (!timeStr) continue;
+
+    const w   = Number(r[idx.weight]);
+    const bf  = Number(r[idx.bodyFat]);
+    const ffm = Number(r[idx.ffm]);
+    if (![w, bf, ffm].every(isFinite)) continue;
+
+    const dtStr = `${formatDate_(d)} ${timeStr}`;
+    out.push([dtStr, w, bf, ffm]);
+  }
+
+  return out;
+}
+
+function headerIndexesRenpho_(headerRow) {
+  const norm = headerRow.map(h => normalizeHeader_(h));
+
+  const findIndex = (aliases, label) => {
+    const normAliases = aliases.map(a => normalizeHeader_(a));
+    for (const a of normAliases) {
+      const i = norm.indexOf(a);
+      if (i !== -1) return i;
+    }
+    throw new Error(`Missing Renpho column: ${label}. Found: ${headerRow.join(", ")}`);
+  };
+
+  return {
+    date:    findIndex(RENPHO_HEADERS.date, "Date"),
+    time:    findIndex(RENPHO_HEADERS.time, "Time"),
+    weight:  findIndex(RENPHO_HEADERS.weight, "Weight"),
+    bodyFat: findIndex(RENPHO_HEADERS.bodyFat, "Body Fat"),
+    ffm:     findIndex(RENPHO_HEADERS.ffm, "Fat-Free Mass"),
+  };
+}
+
+function excelToTempSheet_(fileId) {
+  // Requires Advanced Drive Service enabled (Drive API)
+  const temp = Drive.Files.copy(
+    { title: "TEMP_RENPHO_" + fileId, mimeType: MimeType.GOOGLE_SHEETS },
+    fileId,
+    { convert: true }
+  );
+  return temp.id;
+}
+
+function getProcessedRenphoIds_() {
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty("RENPHO_PROCESSED_IDS");
+  return raw ? new Set(JSON.parse(raw)) : new Set();
+}
+
+function saveProcessedRenphoIds_(set) {
+  PropertiesService.getScriptProperties()
+    .setProperty("RENPHO_PROCESSED_IDS", JSON.stringify([...set]));
+}
+
+// ===============================
+// MACROFACTOR INBOX (normal run)
+// ===============================
+
+function processMacroFactorInboxToDailyEnergy_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const daily = mustGetSheet_(ss, DAILY_ENERGY_SHEET);
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+
+  // De-dupe by date in col A
+  const existing = buildExistingKeySet_(daily, 1, "date");
+
+  const files = inbox.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+    if (!name.toLowerCase().endsWith(".xlsx")) continue;
+
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+
+      // Prefer legacy Quick Export if present, else use new v2 sheets
+      const qe = tempSS.getSheetByName(MF_SHEETS_V2.quickExport);
+      if (qe) appended += ingestDailyFromQuickExport_(qe, daily, existing);
+      else    appended += ingestDailyFromV2Sheets_(tempSS, daily, existing, name);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+  }
+
+  Logger.log(`MacroFactor → Daily_Energy: appended ${appended} rows.`);
+}
+
+function processMacroFactorInboxToFoodLog_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const foodSheet = mustGetSheet_(ss, FOOD_LOG_SHEET_NAME);
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+
+  const existing = buildFoodExistingKeySet_(foodSheet);
+
+  const files = inbox.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+    if (!name.toLowerCase().endsWith(".xlsx")) continue;
+
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+
+      const fl =
+        tempSS.getSheetByName(MF_SHEETS_V2.foodLog) ||
+        findSheetByKeywords_(tempSS, ["food", "log"], MF_SHEETS_V2.foodLog);
+
+      if (!fl) {
+        Logger.log(`MacroFactor: no Food Log-like sheet found in ${name} (skipping food ingest)`);
+        continue;
+      }
+
+      appended += ingestFoodLogSheet_(fl, foodSheet, existing);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+  }
+
+  Logger.log(`Food Log: appended ${appended} meal rows.`);
+}
+
+function processMacroFactorInboxToWorkoutLog_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const staging = mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET);
+
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+  const processed = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+
+  const existing = buildWorkoutExistingKeySet_(staging);
+
+  const files = inbox.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+    if (!name.toLowerCase().endsWith(".xlsx")) continue;
+
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+
+      const wl =
+        tempSS.getSheetByName(MF_SHEETS_V2.workoutLog) ||
+        findSheetByKeywords_(tempSS, ["workout", "log"], MF_SHEETS_V2.workoutLog);
+
+      if (!wl) {
+        Logger.log(`MacroFactor: no Workout Log-like sheet found in ${name} (skipping workout ingest)`);
+        // Your prior behaviour: move to processed even if WL missing
+        moveToProcessed_(file, processed);
+        continue;
+      }
+
+      appended += ingestWorkoutLogSheet_(wl, staging, existing);
+
+      moveToProcessed_(file, processed);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+  }
+
+  Logger.log(`Workout Log: appended ${appended} set rows.`);
+}
+
+// ===============================
+// MACROFACTOR ALL FILES (full rebuild)
+// ===============================
+
+function processMacroFactorAllFilesToDailyEnergy_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const daily = mustGetSheet_(ss, DAILY_ENERGY_SHEET);
+
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+  const processed = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+
+  const existing = new Set(); // rebuilding after clear
+  let appended = 0;
+
+  appended += ingestDailyFromMacroFactorFolder_(processed, daily, existing, false);
+  appended += ingestDailyFromMacroFactorFolder_(inbox, daily, existing, true);
+
+  Logger.log(`MacroFactor (ALL) → Daily_Energy: appended ${appended} rows.`);
+}
+
+function ingestDailyFromMacroFactorFolder_(folder, dailySheet, existingSet, moveToProcessedAfter) {
+  const processedFolder = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+  const files = folder.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+
+    if (!name.toLowerCase().endsWith(".xlsx")) {
+      Logger.log(`MF Daily: skipping non-xlsx: ${name}`);
+      if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+      continue;
     }
 
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-    return df
-
-def pick_logged_days(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Decide which daily rows count as 'logged'.
-    Priority: days_logged_flag==1
-    Fallback: any meaningful nutrition data (calories/macros > 0)
-    """
-    if df.empty:
-        return df
-
-    out = df.copy()
-    flag = safe_num(out.get("days_logged_flag", pd.Series([pd.NA] * len(out)))).fillna(0)
-
-    calories = safe_num(out.get("calories", pd.Series([pd.NA] * len(out)))).fillna(0)
-    p = safe_num(out.get("protein_g", pd.Series([pd.NA] * len(out)))).fillna(0)
-    c = safe_num(out.get("carbs_g", pd.Series([pd.NA] * len(out)))).fillna(0)
-    f = safe_num(out.get("fat_g", pd.Series([pd.NA] * len(out)))).fillna(0)
-
-    logged_mask = (flag >= 1) | (calories > 0) | (p > 0) | (c > 0) | (f > 0)
-    return out.loc[logged_mask].copy()
-
-def metric_or_dash(x, fmt="{:.0f}"):
-    if x is None or pd.isna(x):
-        return "—"
-    try:
-        return fmt.format(float(x))
-    except Exception:
-        return "—"
-
-def safe_domain(values: pd.Series, preferred_domain: list[float], pad_pct: float = 0.05):
-    """
-    If data fits inside preferred_domain, use it.
-    Otherwise compute a padded min/max domain from the data.
-    """
-    v = pd.to_numeric(values, errors="coerce").dropna()
-    if v.empty:
-        return preferred_domain
-    vmin, vmax = float(v.min()), float(v.max())
-    pmin, pmax = float(preferred_domain[0]), float(preferred_domain[1])
-    if vmin >= pmin and vmax <= pmax:
-        return preferred_domain
-    pad = max(1e-6, (vmax - vmin) * pad_pct)
-    return [vmin - pad, vmax + pad]
-
-def kpi_card(label: str, value: str, tone: str = "neutral", help_text: str = ""):
-    """
-    tone: 'good' | 'warn' | 'bad' | 'neutral'
-    """
-    color = {
-        "good": "#16a34a",     # green
-        "warn": "#f59e0b",     # amber
-        "bad": "#dc2626",      # red
-        "neutral": "#64748b",  # slate
-    }.get(tone, "#64748b")
-
-    help_html = f"<div style='margin-top:6px; font-size:12px; color:#94a3b8'>{help_text}</div>" if help_text else ""
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            border-radius: 12px;
-            padding: 12px 14px;
-            background: rgba(15, 23, 42, 0.02);
-        ">
-          <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;">{label}</div>
-          <div style="font-size: 22px; font-weight: 700; color: {color};">{value}</div>
-          {help_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# ============================================================
-# Load BODY weekly
-# ============================================================
-body = load_sheet(WS_BODY_WEEKLY)
-body = body.rename(columns={"date_time": "date"}) if "date_time" in body.columns and "date" not in body.columns else body
-body = normalise_date_col(body, "date")
-body = align_to_monday(body, "date")
-body = to_num(body, ["weight", "body_fat", "fat_free_mass"])
-
-if not body.empty and {"weight", "body_fat"}.issubset(body.columns):
-    body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
-    body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
-
-# ============================================================
-# Date range selector (Monday weeks + presets, bulletproof)
-# ============================================================
-st.subheader("Date range")
-
-if body.empty:
-    st.info("No body data yet.")
-    st.stop()
-
-min_date = body["date"].min().date()
-max_body_date = body["date"].max().date()
-
-today = pd.Timestamp.today().normalize()
-this_monday = monday_of(today)
-
-colA, colB, colC, colD = st.columns([1.4, 1, 1, 2])
-
-with colD:
-    include_report_monday = st.checkbox(
-        "Include current week (report Monday)",
-        value=st.session_state.get("include_report_monday", True),
-        help="Weekly Energy/Training rows are stamped on the next Monday. Enable to include that row in filters/charts.",
-        key="include_report_monday",
-    )
-
-max_end_allowed = max_body_date
-if include_report_monday:
-    max_end_allowed = (pd.Timestamp(max_body_date) + pd.Timedelta(days=7)).date()
-
-with colA:
-    preset_options = [
-        "Last week (Mon–Sun)",
-        "Last 4 weeks",
-        "Last 12 weeks",
-        "Last month (calendar)",
-        "Last 3 months (calendar)",
-        "Last year (rolling 365d)",
-        "Year-to-date",
-        "Custom",
-    ]
-    preset = st.selectbox("Quick range", preset_options, index=0, key="preset_range")
-
-def compute_preset(preset_name: str):
-    if preset_name == "Last week (Mon–Sun)":
-        end = this_monday - pd.Timedelta(days=1)  # last Sunday
-        start = end - pd.Timedelta(days=6)        # last Monday
-        return start.date(), end.date()
-
-    if preset_name == "Last 4 weeks":
-        end = this_monday - pd.Timedelta(days=1)
-        start = end - pd.Timedelta(days=27)
-        return monday_of(start).date(), end.date()
-
-    if preset_name == "Last 12 weeks":
-        end = this_monday - pd.Timedelta(days=1)
-        start = end - pd.Timedelta(days=83)
-        return monday_of(start).date(), end.date()
-
-    if preset_name == "Last month (calendar)":
-        first_this_month = pd.Timestamp(today.year, today.month, 1)
-        last_month_end = first_this_month - pd.Timedelta(days=1)
-        last_month_start = pd.Timestamp(last_month_end.year, last_month_end.month, 1)
-        return last_month_start.date(), last_month_end.date()
-
-    if preset_name == "Last 3 months (calendar)":
-        first_this_month = pd.Timestamp(today.year, today.month, 1)
-        end = first_this_month - pd.Timedelta(days=1)
-        start_month = (first_this_month - pd.DateOffset(months=3)).normalize()
-        start = pd.Timestamp(start_month.year, start_month.month, 1)
-        return start.date(), end.date()
-
-    if preset_name == "Last year (rolling 365d)":
-        end = today
-        start = today - pd.Timedelta(days=365)
-        return start.date(), end.date()
-
-    if preset_name == "Year-to-date":
-        start = pd.Timestamp(today.year, 1, 1)
-        end = today
-        return start.date(), end.date()
-
-    # Custom fallback (12 months based on data)
-    end = max_body_date
-    start = max(min_date, (pd.Timestamp(end) - pd.DateOffset(months=12)).date())
-    return start, end
-
-preset_start, preset_end = compute_preset(preset)
-
-# Clamp preset to widget bounds
-preset_start = max(min_date, min(preset_start, max_end_allowed))
-preset_end = max(min_date, min(preset_end, max_end_allowed))
-if preset_start > preset_end:
-    preset_start = preset_end
-
-# Clamp existing session_state values if present
-if "start_date" in st.session_state and st.session_state["start_date"] is not None:
-    st.session_state["start_date"] = min(max(st.session_state["start_date"], min_date), max_end_allowed)
-if "end_date" in st.session_state and st.session_state["end_date"] is not None:
-    st.session_state["end_date"] = min(max(st.session_state["end_date"], min_date), max_end_allowed)
-
-# For non-custom presets, force widget values
-if preset != "Custom":
-    st.session_state["start_date"] = preset_start
-    st.session_state["end_date"] = preset_end
-
-with colB:
-    start_date = st.date_input(
-        "Start date",
-        value=st.session_state.get("start_date", preset_start),
-        min_value=min_date,
-        max_value=max_end_allowed,
-        key="start_date",
-        disabled=(preset != "Custom"),
-    )
-
-with colC:
-    end_date = st.date_input(
-        "End date",
-        value=st.session_state.get("end_date", preset_end),
-        min_value=min_date,
-        max_value=max_end_allowed,
-        key="end_date",
-        disabled=(preset != "Custom"),
-    )
-
-if start_date is None or end_date is None:
-    st.warning("Please select both a start and end date.")
-    st.stop()
-
-if start_date > end_date:
-    st.error("Start date must be before end date.")
-    st.stop()
-
-# Snap to Monday-week boundaries
-start_dt_monday = monday_of(pd.Timestamp(start_date))
-end_dt_sunday = sunday_of_week(pd.Timestamp(end_date))
-start_date = start_dt_monday.date()
-end_date = end_dt_sunday.date()
-
-# Extend weekly filter window so report-Monday rows show up
-end_date_for_weekly = end_date
-if include_report_monday:
-    end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
-
-st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
-
-# ============================================================
-# Load weekly ENERGY
-# ============================================================
-energy = load_sheet(WS_ENERGY_WEEKLY)
-energy = normalise_date_col(energy, "date")
-energy = align_to_monday(energy, "date")
-
-energy = to_num(energy, [
-    "days_logged",
-    "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
-    "avg_protein_g", "avg_carbs_g", "avg_fat_g",
-    "protein_adherence_avg", "energy_adherence_avg",
-    "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps"
-])
-
-# ============================================================
-# Load weekly TRAINING
-# ============================================================
-train = load_sheet(WS_TRAIN_WEEKLY)
-train = normalise_date_col(train, "date")
-train = align_to_monday(train, "date")
-
-train = to_num(train, [
-    "sets_total", "volume_total", "workouts_completed",
-    "avg_RIR", "muscle_groups_hit_count",
-    "training_minutes_total", "avg_workout_minutes"
-])
-
-# ============================================================
-# Filter weekly views
-# ============================================================
-body_view = filter_range(body, start_date, end_date_for_weekly, "date")
-energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
-train_view = filter_range(train, start_date, end_date_for_weekly, "date")
-
-x_min = pd.Timestamp(start_date)
-x_max = pd.Timestamp(end_date_for_weekly)
-
-# ============================================================
-# Display: Body table
-# ============================================================
-st.subheader("Weekly Body Comp (filtered)")
-body_table = date_for_table(body_view)
-
-if body_table.empty:
-    st.dataframe(body_table, hide_index=True)
-else:
-    st.dataframe(
-        body_table.style.format({
-            "weight": "{:.2f}",
-            "body_fat": "{:.2f}",
-            "fat_free_mass": "{:.2f}",
-            "fat_mass": "{:.2f}",
-            "lean_mass": "{:.2f}",
-        }),
-        hide_index=True
-    )
-
-# ============================================================
-# Charts: Weight Trend
-# ============================================================
-st.subheader("Weight Trend")
-if not body_view.empty and {"date", "weight", "lean_mass"}.issubset(set(body_view.columns)):
-    plot_df = body_view[["date", "weight", "lean_mass"]].copy()
-    melted = plot_df.melt("date", var_name="metric", value_name="value").dropna()
-
-    weight_chart = (
-        alt.Chart(melted)
-        .mark_line(interpolate="monotone", point=True)
-        .encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="Lbs", scale=alt.Scale(domain=WEIGHT_DOMAIN)),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("metric:N", title="Metric"),
-                alt.Tooltip("value:Q", title="Lbs", format=".2f"),
-            ],
-        )
-        .properties(height=360)
-    )
-    st.altair_chart(weight_chart, use_container_width=True)
-else:
-    st.info("No body data in the selected date range.")
-
-# ============================================================
-# Charts: Body Fat %
-# ============================================================
-st.subheader("Body Fat %")
-if not body_view.empty and {"date", "body_fat"}.issubset(set(body_view.columns)):
-    bf_df = body_view[["date", "body_fat"]].copy().dropna()
-
-    bf_chart = (
-        alt.Chart(bf_df)
-        .mark_line(interpolate="monotone", point=True)
-        .encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("body_fat:Q", title="Body Fat %", scale=alt.Scale(domain=BODYFAT_DOMAIN)),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("body_fat:Q", title="Body Fat %", format=".2f"),
-            ],
-        )
-        .properties(height=300)
-    )
-    st.altair_chart(bf_chart, use_container_width=True)
-else:
-    st.info("No data in the selected date range.")
-
-# ============================================================
-# Energy + Training (weekly combined)
-# ============================================================
-st.header("⚡ Energy Balance + Training")
-
-# Join using UNION of dates (so report-Monday rows show)
-date_series = []
-if not body_view.empty and "date" in body_view.columns:
-    date_series.append(body_view["date"])
-if not energy_view.empty and "date" in energy_view.columns:
-    date_series.append(energy_view["date"])
-if not train_view.empty and "date" in train_view.columns:
-    date_series.append(train_view["date"])
-
-if date_series:
-    all_dates = pd.Series(pd.concat(date_series).unique())
-    all_dates = pd.to_datetime(all_dates, errors="coerce").dropna().sort_values()
-    combined = pd.DataFrame({"date": all_dates})
-else:
-    combined = pd.DataFrame(columns=["date"])
-
-if not body_view.empty:
-    body_cols = ["date", "weight", "body_fat", "fat_free_mass", "fat_mass", "lean_mass"]
-    keep = [c for c in body_cols if c in body_view.columns]
-    combined = combined.merge(body_view[keep], on="date", how="left")
-
-if not energy_view.empty:
-    combined = combined.merge(energy_view, on="date", how="left")
-
-if not train_view.empty:
-    combined = combined.merge(train_view, on="date", how="left")
-
-combined = combined.sort_values("date").reset_index(drop=True)
-
-# Derived deltas
-if "weight" in combined.columns:
-    combined["weight_change"] = safe_num(combined["weight"]).diff()
-if "lean_mass" in combined.columns:
-    combined["lean_change"] = safe_num(combined["lean_mass"]).diff()
-if "fat_mass" in combined.columns:
-    combined["fat_change"] = safe_num(combined["fat_mass"]).diff()
-
-# Energy balance (weekly avg kcal/day)
-if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
-    combined["energy_balance"] = safe_num(combined["avg_calories"]) - safe_num(combined["avg_expenditure"])
-
-# Training efficiency metrics
-if "training_minutes_total" in combined.columns and "sets_total" in combined.columns:
-    minutes = safe_num(combined["training_minutes_total"])
-    sets = safe_num(combined["sets_total"])
-    combined["sets_per_hour"] = sets / (minutes / 60.0)
-    combined.loc[(minutes <= 0) | (minutes.isna()), "sets_per_hour"] = pd.NA
-
-if "training_minutes_total" in combined.columns and "volume_total" in combined.columns:
-    minutes = safe_num(combined["training_minutes_total"])
-    vol = safe_num(combined["volume_total"])
-    combined["volume_per_minute"] = vol / minutes
-    combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
-
-# ============================================================
-# This week so far (ALWAYS current week: Monday -> today)
-# ============================================================
-st.subheader("This week so far")
-
-today = pd.Timestamp.today().normalize()
-week_start_dt = monday_of(today)   # Monday
-week_start = week_start_dt.date()
-week_end = today.date()
-
-st.caption(f"Current week window: {week_start} → {week_end}")
-
-# --- Load Daily Energy (once) ---
-daily_energy = load_sheet(WS_DAILY_ENERGY)
-daily_energy = normalise_daily_energy_schema(daily_energy)
-daily_energy = normalise_date_col(daily_energy, "date")
-
-daily_energy = to_num(daily_energy, [
-    "days_logged_flag", "calories", "expenditure", "calorie_target", "calorie_delta",
-    "protein_g", "carbs_g", "fat_g",
-    "protein_target_g", "carbs_target_g", "fat_target_g",
-    "protein_adherence", "energy_adherence",
-    "scale_weight_lb", "trend_weight_lb",
-    "steps"
-])
-
-daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
-
-# --- Load Workout Log (once) ---
-workout_log = load_sheet(WS_WORKOUT_LOG)
-workout_log = normalise_workout_log_schema(workout_log)
-workout_log = normalise_date_col(workout_log, "date")
-workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
-
-workout_week = filter_range(workout_log, week_start, week_end, "date")
-
-# ============================================================
-# Metrics cards
-# ============================================================
-c1, c2, c3, c4 = st.columns(4)
-
-# ------------------------------------------------------------
-# Energy so far this week (split: nutrition vs activity)
-# ------------------------------------------------------------
-de = daily_energy_week.copy()
-
-# Nutrition-logged days (for calories + adherence)
-nutrition = pick_logged_days(de)
-
-# Activity days (for expenditure + steps)
-activity = de.copy()
-if "expenditure" in activity.columns:
-    activity["expenditure"] = pd.to_numeric(activity["expenditure"], errors="coerce")
-if "steps" in activity.columns:
-    activity["steps"] = pd.to_numeric(activity["steps"], errors="coerce")
-
-activity = activity.dropna(subset=["date"])
-activity = activity[
-    (activity.get("expenditure", 0).fillna(0) > 0) | (activity.get("steps", 0).fillna(0) > 0)
-].copy()
-
-# --- Metrics ---
-days_logged = int(len(nutrition)) if not nutrition.empty else 0
-
-avg_cals = nutrition["calories"].mean() if (not nutrition.empty and "calories" in nutrition.columns) else pd.NA
-avg_p_adh = nutrition["protein_adherence"].mean() if (not nutrition.empty and "protein_adherence" in nutrition.columns) else pd.NA
-avg_e_adh = nutrition["energy_adherence"].mean() if (not nutrition.empty and "energy_adherence" in nutrition.columns) else pd.NA
-
-avg_exp = activity["expenditure"].mean() if (not activity.empty and "expenditure" in activity.columns) else pd.NA
-avg_steps = activity["steps"].mean() if (not activity.empty and "steps" in activity.columns) else pd.NA
-
-avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
-
-with c1:
-    st.metric("Days logged (nutrition)", days_logged)
-
-with c2:
-    st.metric("Avg calories", metric_or_dash(avg_cals, "{:.0f}"))
-    st.metric("Avg expenditure", metric_or_dash(avg_exp, "{:.0f}"))
-
-with c3:
-    st.metric("Avg balance", metric_or_dash(avg_bal, "{:.0f}"))
-    st.metric("Avg steps", metric_or_dash(avg_steps, "{:.0f}"))
-
-with c4:
-    st.metric("Protein adherence", metric_or_dash(avg_p_adh * 100 if pd.notna(avg_p_adh) else pd.NA, "{:.0f}%"))
-    st.metric("Energy adherence", metric_or_dash(avg_e_adh * 100 if pd.notna(avg_e_adh) else pd.NA, "{:.0f}%"))
-
-# Friendly message if calories/macros weren’t logged but activity exists
-if nutrition.empty and not activity.empty:
-    st.info("No nutrition logged yet this week, but activity data (expenditure/steps) is available.")
-
-# ------------------------------------------------------------
-# Training so far this week (unique sessions)
-# ------------------------------------------------------------
-if not workout_week.empty and ("workout_duration" in workout_week.columns) and ("workout" in workout_week.columns):
-    wk = workout_week.copy()
-
-    # Unique session key by day + workout name
-    wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
-
-    # workout_duration is seconds -> minutes
-    session_minutes = wk.groupby("session_key")["workout_duration"].max() / 60.0
-    minutes_total = float(session_minutes.sum())
-    workouts_completed = int(session_minutes.shape[0])
-
-    stypes = wk["set_type"].astype(str).str.strip().str.lower() if "set_type" in wk.columns else pd.Series([], dtype=str)
-    wk_working = wk[stypes.isin(["standard set", "failure set"])].copy() if len(stypes) else wk.copy()
-
-    sets_total = int(len(wk_working))
-    volume_total = (
-        (safe_num(wk_working["weight_lb"]) * safe_num(wk_working["reps"])).sum()
-        if ("weight_lb" in wk_working.columns and "reps" in wk_working.columns) else pd.NA
-    )
-    avg_rir = safe_num(wk_working["rir"]).mean() if "rir" in wk_working.columns else pd.NA
-    sets_per_hour = sets_total / (minutes_total / 60.0) if minutes_total > 0 else pd.NA
-
-    st.caption("Training this week so far")
-    t1, t2, t3, t4 = st.columns(4)
-    with t1:
-        st.metric("Workouts", workouts_completed)
-        st.metric("Minutes", metric_or_dash(minutes_total, "{:.1f}"))
-    with t2:
-        st.metric("Sets", sets_total)
-        st.metric("Avg RIR", metric_or_dash(avg_rir, "{:.2f}"))
-    with t3:
-        st.metric("Volume (lbs·reps)", metric_or_dash(volume_total, "{:.0f}"))
-    with t4:
-        st.metric("Sets/hour", metric_or_dash(sets_per_hour, "{:.1f}"))
-else:
-    st.caption("No workout log rows for this week yet.")
-
-# ============================================================
-# Combined table (weekly)
-# ============================================================
-with st.expander("Combined weekly table (filtered)", expanded=False):
-    combined_table = date_for_table(combined)
-
-    round0 = ["avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
-              "energy_balance", "avg_steps", "training_minutes_total", "avg_workout_minutes", "volume_total"]
-    round2 = ["weight", "fat_free_mass", "fat_mass", "lean_mass", "weight_change", "lean_change", "fat_change",
-              "avg_scale_weight_lb", "avg_trend_weight_lb", "sets_per_hour", "volume_per_minute"]
-    round3 = ["protein_adherence_avg", "energy_adherence_avg"]
-
-    for c in round0:
-        if c in combined_table.columns:
-            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(0)
-    for c in round2:
-        if c in combined_table.columns:
-            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(2)
-    for c in round3:
-        if c in combined_table.columns:
-            combined_table[c] = pd.to_numeric(combined_table[c], errors="coerce").round(3)
-
-    st.dataframe(combined_table, hide_index=True)
-
-# ============================================================
-# Charts
-# ============================================================
-
-# A) Calories vs Expenditure (weekly) — fixed y-scale 1000–5000
-st.subheader("Calories vs Expenditure (weekly)")
-
-if ("avg_calories" in combined.columns) and ("avg_expenditure" in combined.columns):
-    ce = combined[["date", "avg_calories", "avg_expenditure"]].copy()
-    ce["date"] = pd.to_datetime(ce["date"], errors="coerce")
-    ce["avg_calories"] = pd.to_numeric(ce["avg_calories"], errors="coerce")
-    ce["avg_expenditure"] = pd.to_numeric(ce["avg_expenditure"], errors="coerce")
-
-    ce_m = ce.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
-
-    if ce_m.empty:
-        st.caption("No weekly energy data in the selected date range yet.")
-    else:
-        base = alt.Chart(ce_m).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y(
-                "value:Q",
-                title="kcal",
-                scale=alt.Scale(domain=CALORIES_DOMAIN, clamp=True)
-            ),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[
-                alt.Tooltip("date:T", title="Week"),
-                alt.Tooltip("metric:N"),
-                alt.Tooltip("value:Q", format=".0f"),
-            ],
-        )
-        ce_chart = (base.mark_line(interpolate="monotone") + base.mark_circle(size=90)).properties(height=300)
-        st.altair_chart(ce_chart, use_container_width=True)
-else:
-    st.caption("No weekly energy columns found.")
-
-# B) Energy balance
-if "energy_balance" in combined.columns and safe_num(combined["energy_balance"]).notna().any():
-    st.subheader("Estimated energy balance (Calories − Expenditure)")
-    eb = combined[["date", "energy_balance"]].copy()
-    eb["date"] = pd.to_datetime(eb["date"], errors="coerce")
-    eb["energy_balance"] = pd.to_numeric(eb["energy_balance"], errors="coerce")
-    eb = eb.dropna(subset=["date", "energy_balance"])
-
-    if not eb.empty:
-        max_abs = float(eb["energy_balance"].abs().max())
-        dom = max(600.0, max_abs)
-        dom = (int(dom / 50) + 1) * 50
-
-        eb_chart = alt.Chart(eb).mark_bar().encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("energy_balance:Q", title="kcal / day (avg)", scale=alt.Scale(domain=[-dom, dom])),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("energy_balance:Q", format=".0f")]
-        ).properties(height=250)
-
-        st.altair_chart(eb_chart, use_container_width=True)
-
-# C) Weight change vs energy balance
-sc = combined[["date"]].copy()
-if "energy_balance" in combined.columns:
-    sc["energy_balance"] = pd.to_numeric(combined["energy_balance"], errors="coerce")
-if "weight_change" in combined.columns:
-    sc["weight_change"] = pd.to_numeric(combined["weight_change"], errors="coerce")
-sc["date"] = pd.to_datetime(combined["date"], errors="coerce")
-sc = sc.dropna(subset=["date", "energy_balance", "weight_change"]) if {"energy_balance", "weight_change"}.issubset(sc.columns) else pd.DataFrame()
-
-if not sc.empty:
-    st.subheader("Weight change vs energy balance (weekly)")
-    scatter = alt.Chart(sc).mark_circle(size=90).encode(
-        x=alt.X("energy_balance:Q", title="Energy balance (kcal/day avg)"),
-        y=alt.Y("weight_change:Q", title="Weekly weight change (lbs)"),
-        tooltip=[
-            alt.Tooltip("date:T", title="Week"),
-            alt.Tooltip("energy_balance:Q", format=".0f"),
-            alt.Tooltip("weight_change:Q", format=".2f"),
-        ]
-    ).properties(height=300)
-    st.altair_chart(scatter, use_container_width=True)
-
-# D) Adherence dashboard — show as percent
-st.subheader("Adherence (weekly)")
-
-has_adh = (
-    ("protein_adherence_avg" in combined.columns and safe_num(combined["protein_adherence_avg"]).notna().any())
-    or
-    ("energy_adherence_avg" in combined.columns and safe_num(combined["energy_adherence_avg"]).notna().any())
-)
-
-if has_adh:
-    adh = combined[["date"]].copy()
-    adh["date"] = pd.to_datetime(adh["date"], errors="coerce")
-
-    if "protein_adherence_avg" in combined.columns:
-        adh["protein_adherence_avg"] = pd.to_numeric(combined["protein_adherence_avg"], errors="coerce")
-    if "energy_adherence_avg" in combined.columns:
-        adh["energy_adherence_avg"] = pd.to_numeric(combined["energy_adherence_avg"], errors="coerce")
-
-    adh_m = adh.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
-
-    if not adh_m.empty:
-        adh_m = adh_m.copy()
-        adh_m["value_pct"] = adh_m["value"] * 100
-
-        adh_chart = alt.Chart(adh_m).mark_line(interpolate="monotone", point=True).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y(
-                "value_pct:Q",
-                title="Adherence (%)",
-                scale=alt.Scale(domain=ADH_PCT_DOMAIN, clamp=True),
-            ),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[
-                alt.Tooltip("date:T", title="Week"),
-                alt.Tooltip("metric:N", title="Metric"),
-                alt.Tooltip("value_pct:Q", title="Adherence (%)", format=".0f"),
-            ],
-        ).properties(height=260)
-
-        st.altair_chart(adh_chart, use_container_width=True)
-
-    # Keep threshold logic in ratio space (0.9 = 90%)
-    p_ok = (combined["protein_adherence_avg"] >= 0.9).mean() if "protein_adherence_avg" in combined.columns else pd.NA
-    e_ok = (combined["energy_adherence_avg"] >= 0.9).mean() if "energy_adherence_avg" in combined.columns else pd.NA
-
-    a1, a2 = st.columns(2)
-    with a1:
-        st.metric("% weeks protein ≥ 90%", metric_or_dash(p_ok * 100 if pd.notna(p_ok) else pd.NA, "{:.0f}%"))
-    with a2:
-        st.metric("% weeks energy ≥ 90%", metric_or_dash(e_ok * 100 if pd.notna(e_ok) else pd.NA, "{:.0f}%"))
-else:
-    st.caption("No adherence data yet.")
-
-# E) Lean vs Fat change
-st.subheader("Lean vs Fat change (weekly)")
-lf = combined[["date"]].copy()
-lf["date"] = pd.to_datetime(lf["date"], errors="coerce")
-if "lean_change" in combined.columns:
-    lf["lean_change"] = pd.to_numeric(combined["lean_change"], errors="coerce")
-if "fat_change" in combined.columns:
-    lf["fat_change"] = pd.to_numeric(combined["fat_change"], errors="coerce")
-
-if {"lean_change", "fat_change"}.issubset(lf.columns):
-    lf_m = lf.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
-    if not lf_m.empty:
-        lf_chart = alt.Chart(lf_m).mark_bar().encode(
-            x=alt.X("date:T", title="Week", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="lbs"),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-        ).properties(height=260)
-        st.altair_chart(lf_chart, use_container_width=True)
-    else:
-        st.caption("No change data yet.")
-else:
-    st.caption("No change data yet.")
-
-# F) Training efficiency
-st.subheader("Training efficiency")
-has_eff = ("training_minutes_total" in combined.columns and safe_num(combined["training_minutes_total"]).notna().any())
-if has_eff:
-    te_cols = ["date", "training_minutes_total"]
-    if "sets_per_hour" in combined.columns:
-        te_cols.append("sets_per_hour")
-    if "volume_per_minute" in combined.columns:
-        te_cols.append("volume_per_minute")
-
-    te = combined[te_cols].copy()
-    te["date"] = pd.to_datetime(te["date"], errors="coerce")
-    for c in te_cols:
-        if c != "date":
-            te[c] = pd.to_numeric(te[c], errors="coerce")
-
-    te_m = te.melt("date", var_name="metric", value_name="value").dropna(subset=["date", "value"])
-
-    if not te_m.empty:
-        te_chart = alt.Chart(te_m).mark_line(interpolate="monotone", point=True).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title=""),
-            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=".2f")]
-        ).properties(height=260)
-        st.altair_chart(te_chart, use_container_width=True)
-else:
-    st.caption("No training minutes yet.")
-
-# G) Training load + Lean mass (STACKED CHARTS — Option 02)
-st.subheader("Training load and Lean Mass (weekly)")
-
-# Choose training metric to show (prefer volume_total, else sets_total, else minutes)
-train_metric = None
-for candidate in ["volume_total", "sets_total", "training_minutes_total"]:
-    if candidate in combined.columns and safe_num(combined[candidate]).notna().any():
-        train_metric = candidate
-        break
-
-lm = combined[["date"]].copy()
-lm["date"] = pd.to_datetime(lm["date"], errors="coerce")
-if "lean_mass" in combined.columns:
-    lm["lean_mass"] = pd.to_numeric(combined["lean_mass"], errors="coerce")
-
-tr = combined[["date"]].copy()
-tr["date"] = pd.to_datetime(tr["date"], errors="coerce")
-if train_metric is not None:
-    tr[train_metric] = pd.to_numeric(combined[train_metric], errors="coerce")
-
-# Lean mass chart (fixed 150–220)
-lm_plot = lm.dropna(subset=["date", "lean_mass"]) if "lean_mass" in lm.columns else pd.DataFrame()
-if not lm_plot.empty:
-    lean_chart = alt.Chart(lm_plot).mark_line(interpolate="monotone", point=True).encode(
-        x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-        y=alt.Y("lean_mass:Q", title="Lean mass (lbs)", scale=alt.Scale(domain=LEAN_DOMAIN, clamp=True)),
-        tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip("lean_mass:Q", format=".2f")]
-    ).properties(height=240)
-    st.altair_chart(lean_chart, use_container_width=True)
-else:
-    st.caption("No lean mass data yet (or none in the selected range).")
-
-# Training chart (fixed 70000–90000 for volume_total; auto fallback if values don't fit)
-if train_metric is not None:
-    tr_plot = tr.dropna(subset=["date", train_metric])
-    if not tr_plot.empty:
-        title_map = {
-            "volume_total": "Training volume (lbs·reps)",
-            "sets_total": "Total sets",
-            "training_minutes_total": "Training minutes",
-        }
-        y_title = title_map.get(train_metric, train_metric)
-
-        # Use your preferred domain only when the metric is volume_total; otherwise let it autoscale
-        if train_metric == "volume_total":
-            dom = safe_domain(tr_plot[train_metric], VOLUME_DOMAIN)
-            y_scale = alt.Scale(domain=dom, clamp=True)
-        else:
-            y_scale = alt.Scale()
-
-        train_chart = alt.Chart(tr_plot).mark_line(interpolate="monotone", point=True).encode(
-            x=alt.X("date:T", title="Date", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y(f"{train_metric}:Q", title=y_title, scale=y_scale),
-            tooltip=[alt.Tooltip("date:T", title="Week"), alt.Tooltip(f"{train_metric}:Q", format=".2f")]
-        ).properties(height=240)
-
-        st.altair_chart(train_chart, use_container_width=True)
-        st.caption(f"Training metric shown: {train_metric}")
-    else:
-        st.caption("No training data in the selected range yet.")
-else:
-    st.caption("No training metric available yet (volume_total / sets_total / training_minutes_total).")
-
-# ============================================================
-# 🎯 Phase helper (Bulk / Recomp / Cut)
-# Put this AFTER combined is built + derived fields are calculated
-# ============================================================
-st.header("🎯 Phase helper")
-
-goal = st.selectbox(
-    "Goal mode",
-    ["Auto (suggest)", "Bulk", "Recomp", "Cut"],
-    index=0,
-    help="Auto suggests a phase using 4-week trends. You can also lock it to Bulk/Recomp/Cut to colour KPIs accordingly."
-)
-
-lookback_weeks = st.slider(
-    "Trend window (weeks)",
-    min_value=4,
-    max_value=8,
-    value=4,
-    step=1,
-    help="Uses week-to-week deltas over this window."
-)
-
-# --- Prep numeric fields safely ---
-trend = combined.copy()
-trend["date"] = pd.to_datetime(trend["date"], errors="coerce")
-
-for col in ["weight", "lean_mass", "fat_mass", "body_fat", "energy_balance", "avg_calories", "avg_expenditure", "volume_total", "sets_total"]:
-    if col in trend.columns:
-        trend[col] = pd.to_numeric(trend[col], errors="coerce")
-
-trend = trend.dropna(subset=["date"]).sort_values("date")
-
-# Need at least (lookback_weeks + 1) rows to compute deltas properly
-if len(trend) < 2:
-    st.caption("Not enough weekly rows yet to compute trends.")
-else:
-    # --- 4-8 week deltas (latest vs N weeks ago) ---
-    def delta(col: str):
-        if col not in trend.columns:
-            return pd.NA
-        s = trend[col]
-        return s.iloc[-1] - s.shift(lookback_weeks).iloc[-1]
-
-    d_weight = delta("weight")
-    d_lean   = delta("lean_mass")
-    d_fat    = delta("fat_mass")
-    d_bf     = delta("body_fat")
-
-    # rolling averages (more stable than single-week)
-    eb_avg = trend["energy_balance"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "energy_balance" in trend.columns else pd.NA
-    cal_avg = trend["avg_calories"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "avg_calories" in trend.columns else pd.NA
-    exp_avg = trend["avg_expenditure"].rolling(lookback_weeks, min_periods=1).mean().iloc[-1] if "avg_expenditure" in trend.columns else pd.NA
-
-    # --- Auto suggestion logic (simple + honest) ---
-    # Uses BF level + direction + lean trend; not "absolute truth"
-    latest_bf = trend["body_fat"].iloc[-1] if "body_fat" in trend.columns else pd.NA
-
-    auto_mode = "Recomp"
-    auto_reason = []
-
-    # Basic heuristics (tweak as you like)
-    if pd.notna(latest_bf) and latest_bf >= 20:
-        auto_mode = "Cut"
-        auto_reason.append("Body fat is in a higher zone (≥ ~20%).")
-    elif pd.notna(latest_bf) and latest_bf <= 15:
-        auto_mode = "Bulk"
-        auto_reason.append("Body fat is in a leaner zone (≤ ~15%).")
-    else:
-        auto_mode = "Recomp"
-        auto_reason.append("Body fat is in the middle zone (15–20%).")
-
-    # Lean trend tie-breaker
-    if pd.notna(d_lean):
-        if d_lean < -0.25:
-            auto_reason.append("Lean trend is down over the window → prioritize recovery/protein and avoid aggressive cuts.")
-            if auto_mode == "Cut":
-                auto_mode = "Recomp"
-        elif d_lean > 0.25:
-            auto_reason.append("Lean trend is up over the window → you’re in a productive zone.")
-
-    # Energy balance tie-breaker (if present)
-    if pd.notna(eb_avg):
-        if eb_avg > 200 and auto_mode == "Cut":
-            auto_reason.append("Average balance is strongly positive → a cut would likely require dialing intake down.")
-        if eb_avg < -200 and auto_mode == "Bulk":
-            auto_reason.append("Average balance is strongly negative → a bulk would likely require dialing intake up.")
-
-    # Decide applied mode
-    mode = auto_mode if goal == "Auto (suggest)" else goal
-
-    if goal == "Auto (suggest)":
-        st.caption(f"**Auto suggestion:** {auto_mode}  •  " + " ".join(auto_reason))
-
-    # --- KPI colouring rules by mode ---
-    def tone_for_energy(balance):
-        if pd.isna(balance):
-            return "neutral"
-        if mode == "Cut":
-            return "good" if balance < 0 else "bad"
-        if mode == "Bulk":
-            return "good" if balance > 0 else "bad"
-        # Recomp: near 0 is good
-        return "good" if abs(balance) <= 150 else "warn"
-
-    def tone_for_lean(x):
-        if pd.isna(x):
-            return "neutral"
-        # Lean up is generally good across phases, but huge jumps can be water/glycogen
-        return "good" if x > 0 else ("warn" if x == 0 else "bad")
-
-    def tone_for_fat(x):
-        if pd.isna(x):
-            return "neutral"
-        if mode == "Cut":
-            return "good" if x < 0 else "bad"
-        if mode == "Bulk":
-            # small fat gain is acceptable; big gain is not
-            return "good" if x <= 0.5 else ("warn" if x <= 1.5 else "bad")
-        # Recomp
-        return "good" if x <= 0 else ("warn" if x <= 0.75 else "bad")
-
-    # --- Display cards ---
-    k1, k2, k3, k4 = st.columns(4)
-
-    with k1:
-        kpi_card(
-            f"Lean Δ ({lookback_weeks}w)",
-            "—" if pd.isna(d_lean) else f"{d_lean:+.2f} lb",
-            tone=tone_for_lean(d_lean),
-            help_text="Positive is usually a good sign (but small swings can be water/glycogen).",
-        )
-
-    with k2:
-        kpi_card(
-            f"Fat Δ ({lookback_weeks}w)",
-            "—" if pd.isna(d_fat) else f"{d_fat:+.2f} lb",
-            tone=tone_for_fat(d_fat),
-            help_text="Interpreted relative to your selected goal mode.",
-        )
-
-    with k3:
-        kpi_card(
-            f"Weight Δ ({lookback_weeks}w)",
-            "—" if pd.isna(d_weight) else f"{d_weight:+.2f} lb",
-            tone="neutral",
-            help_text="Use together with Lean/Fat deltas for context.",
-        )
-
-    with k4:
-        kpi_card(
-            f"Avg energy balance ({lookback_weeks}w)",
-            "—" if pd.isna(eb_avg) else f"{eb_avg:+.0f} kcal/day",
-            tone=tone_for_energy(eb_avg),
-            help_text="Calories − expenditure (weekly averages).",
-        )
-
-    # Optional: show BF level + change
-    b1, b2 = st.columns(2)
-    with b1:
-        kpi_card("Body fat % (latest)", "—" if pd.isna(latest_bf) else f"{latest_bf:.1f}%", tone="neutral")
-    with b2:
-        kpi_card(f"Body fat Δ ({lookback_weeks}w)", "—" if pd.isna(d_bf) else f"{d_bf:+.2f}%", tone="neutral")
-
-
-# ============================================================
-# Food patterns
-# ============================================================
-st.header("🍽️ Food patterns")
-
-food = load_sheet(WS_FOOD_LOG)
-
-if food.empty:
-    st.caption(f"{WS_FOOD_LOG} is empty (or missing).")
-else:
-    food = food.copy()
-
-    staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
-    raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
-
-    if staging_cols.issubset(set(food.columns)):
-        food = food.rename(columns={
-            "calories_kcal": "calories",
-            "protein_g": "protein",
-            "carbs_g": "carbs",
-            "fat_g": "fat",
-        })
-    elif raw_cols.issubset(set(food.columns)):
-        food = food.rename(columns={
-            "Date": "date",
-            "Time": "time",
-            "Food Name": "food_name",
-            "Calories (kcal)": "calories",
-            "Protein (g)": "protein",
-            "Carbs (g)": "carbs",
-            "Fat (g)": "fat",
-        })
-    else:
-        st.error(f"Food log columns not recognized. Columns found: {list(food.columns)}")
-        st.stop()
-
-    food = normalise_date_col(food, "date")
-    for c in ["calories", "protein", "carbs", "fat"]:
-        if c in food.columns:
-            food[c] = pd.to_numeric(food[c], errors="coerce")
-
-    if "food_name" in food.columns:
-        food["food_name"] = food["food_name"].astype(str).str.strip()
-
-    food_view = filter_range(food, start_date, end_date_for_weekly, "date")
-    if food_view.empty:
-        st.caption("No food rows in the selected date range.")
-    else:
-        st.subheader("Weekday vs weekend (avg daily totals)")
-        daily_food = (
-            food_view.groupby("date", as_index=False)[["calories", "protein", "carbs", "fat"]]
-            .sum(numeric_only=True)
-        )
-        daily_food["weekday"] = daily_food["date"].dt.weekday
-        daily_food["is_weekend"] = daily_food["weekday"].isin([5, 6])
-
-        weekend_cmp = (
-            daily_food.groupby("is_weekend")[["calories", "protein", "carbs", "fat"]]
-            .mean(numeric_only=True)
-            .reset_index()
-        )
-        weekend_cmp["day_type"] = weekend_cmp["is_weekend"].map({False: "Weekday", True: "Weekend"})
-        st.dataframe(weekend_cmp[["day_type", "calories", "protein", "carbs", "fat"]].round(1), hide_index=True)
-
-        st.subheader("Top foods (by frequency)")
-        top_freq = food_view["food_name"].value_counts().head(15).reset_index()
-        top_freq.columns = ["food_name", "count"]
-        st.dataframe(top_freq, hide_index=True)
-
-        st.subheader("Top foods (by totals)")
-        colX, colY = st.columns(2)
-
-        with colX:
-            st.caption("By total calories")
-            top_cal = (
-                food_view.groupby("food_name", as_index=False)["calories"]
-                .sum()
-                .sort_values("calories", ascending=False)
-                .head(15)
-            )
-            st.dataframe(top_cal, hide_index=True)
-
-        with colY:
-            st.caption("By total protein")
-            top_pro = (
-                food_view.groupby("food_name", as_index=False)["protein"]
-                .sum()
-                .sort_values("protein", ascending=False)
-                .head(15)
-            )
-            st.dataframe(top_pro, hide_index=True)
-
-        st.subheader("Most common foods by time of day")
-        if "time" in food_view.columns and food_view["time"].notna().any():
-            fv = food_view.copy()
-            t1 = pd.to_datetime(fv["time"], format="%I:%M %p", errors="coerce")
-            t2 = pd.to_datetime(fv["time"], format="%H:%M", errors="coerce")
-            t = t1.fillna(t2)
-            fv["hour"] = t.dt.hour
-
-            def bucket(h):
-                if pd.isna(h):
-                    return "Unknown"
-                h = int(h)
-                if 5 <= h < 11:
-                    return "Breakfast"
-                if 11 <= h < 15:
-                    return "Lunch"
-                if 15 <= h < 19:
-                    return "Dinner"
-                return "Evening"
-
-            fv["meal_bucket"] = fv["hour"].apply(bucket)
-
-            for bucket_name in ["Breakfast", "Lunch", "Dinner", "Evening"]:
-                sub = fv[fv["meal_bucket"] == bucket_name]
-                if sub.empty:
-                    continue
-                st.caption(bucket_name)
-                b = sub["food_name"].value_counts().head(10).reset_index()
-                b.columns = ["food_name", "count"]
-                st.dataframe(b, hide_index=True)
-        else:
-            st.caption("No time data available in the selected range.")
-
-        st.subheader("Daily macros over time (grams)")
-        daily_macros = (
-            food_view.groupby("date", as_index=False)[["protein", "carbs", "fat"]]
-            .sum(numeric_only=True)
-            .dropna()
-        )
-        if not daily_macros.empty:
-            macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
-            macro_chart = (
-                alt.Chart(macro_m)
-                .mark_line(interpolate="monotone", point=True)
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("grams:Q", title="grams"),
-                    color=alt.Color("macro:N", title=""),
-                    tooltip=[
-                        alt.Tooltip("date:T"),
-                        alt.Tooltip("macro:N"),
-                        alt.Tooltip("grams:Q", format=".0f"),
-                    ],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(macro_chart, use_container_width=True)
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+      const qe = tempSS.getSheetByName(MF_SHEETS_V2.quickExport);
+
+      if (qe) appended += ingestDailyFromQuickExport_(qe, dailySheet, existingSet);
+      else    appended += ingestDailyFromV2Sheets_(tempSS, dailySheet, existingSet, name);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+
+    if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+  }
+
+  return appended;
+}
+
+function processMacroFactorAllFilesToFoodLog_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const foodSheet = mustGetSheet_(ss, FOOD_LOG_SHEET_NAME);
+
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+  const processed = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+
+  const existing = new Set();
+  let appended = 0;
+
+  appended += ingestFoodFromMacroFactorFolder_(processed, foodSheet, existing, false);
+  appended += ingestFoodFromMacroFactorFolder_(inbox, foodSheet, existing, true);
+
+  Logger.log(`Food Log (ALL): appended ${appended} meal rows.`);
+}
+
+function ingestFoodFromMacroFactorFolder_(folder, foodSheet, existingSet, moveToProcessedAfter) {
+  const processedFolder = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+  const files = folder.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+
+    if (!name.toLowerCase().endsWith(".xlsx")) {
+      Logger.log(`MF Food: skipping non-xlsx: ${name}`);
+      if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+      continue;
+    }
+
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+
+      const fl =
+        tempSS.getSheetByName(MF_SHEETS_V2.foodLog) ||
+        findSheetByKeywords_(tempSS, ["food", "log"], MF_SHEETS_V2.foodLog);
+
+      if (!fl) {
+        Logger.log(`MacroFactor: no Food Log-like sheet found in ${name} (skipping)`);
+        if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+        continue;
+      }
+
+      appended += ingestFoodLogSheet_(fl, foodSheet, existingSet);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+
+    if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+  }
+
+  return appended;
+}
+
+function processMacroFactorAllFilesToWorkoutLog_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const staging = mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET);
+
+  const inbox = DriveApp.getFolderById(MF_INBOX_FOLDER_ID);
+  const processed = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+
+  const existing = new Set();
+  let appended = 0;
+
+  appended += ingestWorkoutFromMacroFactorFolder_(processed, staging, existing, false);
+  appended += ingestWorkoutFromMacroFactorFolder_(inbox, staging, existing, true);
+
+  Logger.log(`Workout Log (ALL): appended ${appended} set rows.`);
+}
+
+function ingestWorkoutFromMacroFactorFolder_(folder, stagingSheet, existingSet, moveToProcessedAfter) {
+  const processedFolder = DriveApp.getFolderById(MF_PROCESSED_FOLDER_ID);
+  const files = folder.getFiles();
+  let appended = 0;
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = String(file.getName() || "");
+
+    if (!name.toLowerCase().endsWith(".xlsx")) {
+      Logger.log(`MF Workout: skipping non-xlsx: ${name}`);
+      if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+      continue;
+    }
+
+    const tempSheetId = convertXlsxToGoogleSheet_WithRetry_(file.getId(), `TEMP_MF_${name}`, 5);
+    try {
+      const tempSS = SpreadsheetApp.openById(tempSheetId);
+
+      const wl =
+        tempSS.getSheetByName(MF_SHEETS_V2.workoutLog) ||
+        findSheetByKeywords_(tempSS, ["workout", "log"], MF_SHEETS_V2.workoutLog);
+
+      if (!wl) {
+        Logger.log(`MacroFactor: no Workout Log-like sheet found in ${name} (skipping)`);
+        if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+        continue;
+      }
+
+      appended += ingestWorkoutLogSheet_(wl, stagingSheet, existingSet);
+
+    } finally {
+      try { DriveApp.getFileById(tempSheetId).setTrashed(true); } catch (e) {}
+    }
+
+    if (moveToProcessedAfter) moveToProcessed_(file, processedFolder);
+  }
+
+  return appended;
+}
+
+// ===============================
+// INGEST: DAILY ENERGY (Quick Export legacy)
+// ===============================
+
+function ingestDailyFromQuickExport_(qeSheet, dailySheet, existingSet) {
+  const values = qeSheet.getDataRange().getValues();
+  if (!values || values.length < 2) return 0;
+
+  const header = values[0].map(h => String(h).trim());
+  const idx = headerIndexesMFQuickExport_(header);
+
+  const toAppend = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (!r || r.length === 0) continue;
+
+    const d = parseDateFlexible_(r[idx.date]);
+    if (!d) continue;
+
+    const dateKey = formatDate_(d);
+    if (existingSet.has(dateKey)) continue;
+
+    const expenditure = Number(r[idx.expenditure]);
+    const trendW      = Number(r[idx.trendWeight]);
+    const weight      = Number(r[idx.weight]);
+
+    const calories    = Number(r[idx.calories]);
+    const protein     = Number(r[idx.protein]);
+    const carbs       = Number(r[idx.carbs]);
+    const fat         = Number(r[idx.fat]);
+
+    const calTarget   = Number(r[idx.targetCalories]);
+    const protTarget  = Number(r[idx.targetProtein]);
+    const carbTarget  = Number(r[idx.targetCarbs]);
+    const fatTarget   = Number(r[idx.targetFat]);
+
+    const steps       = Number(r[idx.steps]);
+
+    const nums = [
+      expenditure, trendW, weight,
+      calories, protein, carbs, fat,
+      calTarget, protTarget, carbTarget, fatTarget,
+      steps
+    ];
+    if (!nums.every(isFinite)) continue;
+
+    const logged = (calories > 0 ? 1 : 0);
+
+    const calorieDelta = logged ? (calories - expenditure) : "";
+    const proteinAdh   = (logged && protTarget > 0) ? (protein / protTarget) : "";
+    const energyAdh    = (logged && calTarget > 0)  ? (calories / calTarget) : "";
+
+    toAppend.push([
+      dateKey,
+      logged,
+      calories,
+      expenditure,
+      calTarget,
+      (calorieDelta === "" ? "" : round_(calorieDelta, 0)),
+      protein,
+      carbs,
+      fat,
+      protTarget,
+      carbTarget,
+      fatTarget,
+      (proteinAdh === "" ? "" : round_(proteinAdh, 3)),
+      (energyAdh === "" ? "" : round_(energyAdh, 3)),
+      weight,
+      trendW,
+      steps
+    ]);
+
+    existingSet.add(dateKey);
+  }
+
+  if (toAppend.length > 0) {
+    dailySheet.getRange(dailySheet.getLastRow() + 1, 1, toAppend.length, 17).setValues(toAppend);
+  }
+
+  return toAppend.length;
+}
+
+function headerIndexesMFQuickExport_(headerRow) {
+  const getIndex = (name) => {
+    const i = headerRow.indexOf(name);
+    if (i === -1) throw new Error(`Missing MacroFactor Quick Export column: ${name}`);
+    return i;
+  };
+
+  return {
+    date: getIndex(MF_QE_HEADERS.date),
+    expenditure: getIndex(MF_QE_HEADERS.expenditure),
+    trendWeight: getIndex(MF_QE_HEADERS.trendWeight),
+    weight: getIndex(MF_QE_HEADERS.weight),
+    calories: getIndex(MF_QE_HEADERS.calories),
+    protein: getIndex(MF_QE_HEADERS.protein),
+    carbs: getIndex(MF_QE_HEADERS.carbs),
+    fat: getIndex(MF_QE_HEADERS.fat),
+    targetCalories: getIndex(MF_QE_HEADERS.targetCalories),
+    targetProtein: getIndex(MF_QE_HEADERS.targetProtein),
+    targetCarbs: getIndex(MF_QE_HEADERS.targetCarbs),
+    targetFat: getIndex(MF_QE_HEADERS.targetFat),
+    steps: getIndex(MF_QE_HEADERS.steps),
+  };
+}
+
+// ===============================
+// INGEST: DAILY ENERGY (v2 exports)
+// ===============================
+
+function ingestDailyFromV2Sheets_(tempSS, dailySheet, existingSet, fileName) {
+  const shCM  = findSheetByKeywords_(tempSS, ["calories", "macros"], MF_SHEETS_V2.caloriesMacros);
+  if (!shCM) throw new Error(`MacroFactor export missing Calories/Macros sheet in: ${fileName}`);
+
+  const shExp = findSheetByKeywords_(tempSS, ["expenditure"], MF_SHEETS_V2.expenditure);
+  const shWT  = findSheetByKeywords_(tempSS, ["weight", "trend"], MF_SHEETS_V2.weightTrend);
+  const shPS  =
+    findSheetByKeywords_(tempSS, ["program", "settings"], MF_SHEETS_V2.programSettings) ||
+    findSheetByKeywords_(tempSS, ["nutrition", "program"], MF_SHEETS_V2.programSettings);
+
+  const cm  = readTable_(shCM);
+  const exp = shExp ? readTable_(shExp) : null;
+  const wt  = shWT  ? readTable_(shWT)  : null;
+
+  const targetsTimeline = shPS ? buildTargetsTimelineFromProgramSettings_(shPS) : [];
+
+  const colAny_ = (hdr, names, requiredLabel) => {
+    for (const n of names) {
+      const i = hdr.indexOf(n);
+      if (i !== -1) return i;
+    }
+    if (requiredLabel) {
+      throw new Error(`MacroFactor sheet is missing expected column: ${requiredLabel}. Found: ${hdr.join(", ")}`);
+    }
+    return -1;
+  };
+
+  // Expenditure + Steps map + date universe
+  const expMap = new Map();
+  const allDates = new Set();
+
+  if (exp && exp.values.length > 1) {
+    const hdr = exp.header;
+    const idxDate  = colAny_(hdr, ["Date"], "Date");
+    const idxExp   = colAny_(hdr, ["Expenditure", "Expenditure (kcal)", "Energy Expenditure", "Energy Expenditure (kcal)"], "Expenditure");
+    const idxSteps = colAny_(hdr, ["Steps"], null);
+
+    for (let i = 0; i < exp.body.length; i++) {
+      const r = exp.body[i];
+      const d = parseDateFlexible_(r[idxDate]);
+      if (!d) continue;
+
+      const k = formatDate_(d);
+      const expenditure = Number(r[idxExp]);
+      const steps = (idxSteps !== -1) ? Number(r[idxSteps]) : "";
+
+      expMap.set(k, {
+        expenditure: isFinite(expenditure) ? expenditure : "",
+        steps: isFinite(steps) ? steps : ""
+      });
+
+      allDates.add(k);
+    }
+  }
+
+  // Weight + Trend maps
+  const weightMap = new Map();
+  const trendMap  = new Map();
+
+  if (wt && wt.values.length > 1) {
+    const hdr = wt.header;
+    const idxDate  = colAny_(hdr, ["Date"], "Date");
+    const idxTrend = colAny_(hdr, ["Trend Weight (lbs)", "Trend Weight", "Trend Weight (lb)"], null);
+    const idxW     = colAny_(hdr, ["Weight (lbs)", "Scale Weight (lbs)", "Weight", "Scale Weight"], null);
+
+    for (let i = 0; i < wt.body.length; i++) {
+      const r = wt.body[i];
+      const d = parseDateFlexible_(r[idxDate]);
+      if (!d) continue;
+
+      const k = formatDate_(d);
+
+      if (idxTrend !== -1) {
+        const tw = Number(r[idxTrend]);
+        if (isFinite(tw)) trendMap.set(k, tw);
+      }
+
+      if (idxW !== -1) {
+        const w = Number(r[idxW]);
+        if (isFinite(w)) weightMap.set(k, w);
+      }
+
+      allDates.add(k);
+    }
+  }
+
+  // Calories & Macros map
+  const cmHdr = cm.header;
+  const iDate = colAny_(cmHdr, ["Date"], "Date");
+  const iCals = colAny_(cmHdr, ["Calories (kcal)", "Calories"], "Calories (kcal)");
+  const iP    = colAny_(cmHdr, ["Protein (g)", "Protein"], "Protein (g)");
+  const iCarb = colAny_(cmHdr, ["Carbs (g)", "Carbs"], "Carbs (g)");
+  const iFat  = colAny_(cmHdr, ["Fat (g)", "Fat"], "Fat (g)");
+  const iW    = colAny_(cmHdr, ["Weight (lbs)", "Scale Weight (lbs)", "Weight", "Scale Weight"], null);
+
+  const macrosMap = new Map();
+
+  for (let i = 0; i < cm.body.length; i++) {
+    const r = cm.body[i];
+    const d = parseDateFlexible_(r[iDate]);
+    if (!d) continue;
+
+    const k = formatDate_(d);
+
+    const calories = Number(r[iCals]);
+    const protein  = Number(r[iP]);
+    const carbs    = Number(r[iCarb]);
+    const fat      = Number(r[iFat]);
+
+    let w = "";
+    if (iW !== -1) {
+      const w0 = Number(r[iW]);
+      w = isFinite(w0) ? w0 : "";
+    }
+
+    macrosMap.set(k, {
+      calories: isFinite(calories) ? calories : 0,
+      protein:  isFinite(protein)  ? protein  : 0,
+      carbs:    isFinite(carbs)    ? carbs    : 0,
+      fat:      isFinite(fat)      ? fat      : 0,
+      weight:   w
+    });
+
+    allDates.add(k);
+  }
+
+  const allDatesSorted = Array.from(allDates).sort();
+  if (allDatesSorted.length === 0) return 0;
+
+  const toAppend = [];
+
+  for (const dateKey of allDatesSorted) {
+    if (existingSet.has(dateKey)) continue;
+
+    const d = parseDateFlexible_(dateKey);
+    if (!d) continue;
+
+    const expRow = expMap.get(dateKey) || {};
+    const expenditure = (expRow.expenditure !== undefined) ? expRow.expenditure : "";
+    const steps       = (expRow.steps !== undefined) ? expRow.steps : "";
+
+    const macroRow = macrosMap.get(dateKey);
+    const logged = macroRow ? 1 : 0;
+
+    const calories = logged ? macroRow.calories : 0;
+    const protein  = logged ? macroRow.protein  : 0;
+    const carbs    = logged ? macroRow.carbs    : 0;
+    const fat      = logged ? macroRow.fat      : 0;
+
+    const targ = logged ? pickTargetsForDate_(targetsTimeline, d) : null;
+
+    const calTarget  = (targ && isFinite(targ.calories)) ? targ.calories : 0;
+    const protTarget = (targ && isFinite(targ.protein))  ? targ.protein  : 0;
+    const carbTarget = (targ && isFinite(targ.carbs))    ? targ.carbs    : 0;
+    const fatTarget  = (targ && isFinite(targ.fat))      ? targ.fat      : 0;
+
+    const calorieDelta = (logged && isFinite(expenditure)) ? (calories - expenditure) : "";
+    const proteinAdh   = (logged && protTarget > 0) ? (protein / protTarget) : "";
+    const energyAdh    = (logged && calTarget > 0)  ? (calories / calTarget) : "";
+
+    // Scale weight: prefer C&M weight, then Weight Trend sheet weight, else 0
+    let scaleW = 0;
+    if (logged && macroRow.weight !== "" && isFinite(Number(macroRow.weight))) {
+      scaleW = Number(macroRow.weight);
+    } else if (weightMap.has(dateKey)) {
+      scaleW = weightMap.get(dateKey);
+    } else {
+      scaleW = 0;
+    }
+
+    const trendW = trendMap.has(dateKey) ? trendMap.get(dateKey) : 0;
+
+    toAppend.push([
+      dateKey,
+      logged,
+      calories,
+      expenditure,
+      calTarget,
+      (calorieDelta === "" ? "" : round_(calorieDelta, 0)),
+      protein,
+      carbs,
+      fat,
+      protTarget,
+      carbTarget,
+      fatTarget,
+      (proteinAdh === "" ? "" : round_(proteinAdh, 3)),
+      (energyAdh === "" ? "" : round_(energyAdh, 3)),
+      scaleW,
+      trendW,
+      steps
+    ]);
+
+    existingSet.add(dateKey);
+  }
+
+  if (toAppend.length > 0) {
+    dailySheet.getRange(dailySheet.getLastRow() + 1, 1, toAppend.length, 17).setValues(toAppend);
+  }
+
+  return toAppend.length;
+}
+
+// ===============================
+// INGEST: FOOD LOG
+// ===============================
+
+function ingestFoodLogSheet_(flSheet, foodSheet, existingSet) {
+  const values = flSheet.getDataRange().getValues();
+  if (!values || values.length < 2) return 0;
+
+  const header = values[0].map(h => String(h).trim());
+  const idx = headerIndexesFoodLog_(header);
+
+  const toAppend = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (!r || r.length === 0) continue;
+
+    const d = parseDateFlexible_(r[idx.date]);
+    if (!d) continue;
+    const dateKey = formatDate_(d);
+
+    const timeStr  = String(r[idx.time] ?? "").trim();
+    const foodName = String(r[idx.foodName] ?? "").trim();
+    if (!timeStr || !foodName) continue;
+
+    const servingSize = String(r[idx.servingSize] ?? "").trim();
+
+    const servingQty     = Number(r[idx.servingQty]);
+    const servingWeightG = Number(r[idx.servingWeightG]);
+
+    const calories = Number(r[idx.calories]);
+    const fat      = Number(r[idx.fat]);
+    const carbs    = Number(r[idx.carbs]);
+    const protein  = Number(r[idx.protein]);
+
+    if (![calories, fat, carbs, protein].every(isFinite)) continue;
+
+    const sSize = servingSize || "";
+    const sQty  = isFinite(servingQty) ? servingQty : "";
+    const sWg   = isFinite(servingWeightG) ? servingWeightG : "";
+
+    const key = makeFoodKey_(dateKey, timeStr, foodName, calories, sSize, sQty);
+    if (existingSet.has(key)) continue;
+
+    toAppend.push([dateKey, timeStr, foodName, sSize, sQty, sWg, calories, fat, carbs, protein]);
+    existingSet.add(key);
+  }
+
+  if (toAppend.length > 0) {
+    foodSheet.getRange(foodSheet.getLastRow() + 1, 1, toAppend.length, 10).setValues(toAppend);
+  }
+
+  return toAppend.length;
+}
+
+function headerIndexesFoodLog_(headerRow) {
+  const getIndex = (name) => {
+    const i = headerRow.indexOf(name);
+    if (i === -1) throw new Error(`Missing Food Log column: ${name}`);
+    return i;
+  };
+
+  return {
+    date:           getIndex(MF_FOOD_HEADERS.date),
+    time:           getIndex(MF_FOOD_HEADERS.time),
+    foodName:       getIndex(MF_FOOD_HEADERS.foodName),
+    servingSize:    getIndex(MF_FOOD_HEADERS.servingSize),
+    servingQty:     getIndex(MF_FOOD_HEADERS.servingQty),
+    servingWeightG: getIndex(MF_FOOD_HEADERS.servingWeightG),
+    calories:       getIndex(MF_FOOD_HEADERS.calories),
+    fat:            getIndex(MF_FOOD_HEADERS.fat),
+    carbs:          getIndex(MF_FOOD_HEADERS.carbs),
+    protein:        getIndex(MF_FOOD_HEADERS.protein),
+  };
+}
+
+function buildFoodExistingKeySet_(sheet) {
+  const s = new Set();
+  const last = sheet.getLastRow();
+  if (last < 2) return s;
+
+  const values = sheet.getRange(2, 1, last - 1, 10).getValues();
+  values.forEach(r => {
+    const dateKey  = String(r[0] ?? "").trim();
+    const timeStr  = String(r[1] ?? "").trim();
+    const foodName = String(r[2] ?? "").trim();
+    const sSize    = String(r[3] ?? "").trim();
+    const sQty     = (r[4] === "" || r[4] === null || r[4] === undefined) ? "" : Number(r[4]);
+    const calories = Number(r[6]);
+
+    if (!dateKey || !timeStr || !foodName || !isFinite(calories)) return;
+    if (sQty !== "" && !isFinite(sQty)) return;
+
+    s.add(makeFoodKey_(dateKey, timeStr, foodName, calories, sSize, sQty));
+  });
+
+  return s;
+}
+
+function makeFoodKey_(dateKey, timeStr, foodName, calories, servingSize, servingQty) {
+  return [
+    String(dateKey).trim(),
+    String(timeStr).trim().toLowerCase(),
+    String(foodName).trim().toLowerCase(),
+    String(calories),
+    String(servingSize ?? "").trim().toLowerCase(),
+    String(servingQty === "" ? "" : servingQty)
+  ].join("|");
+}
+
+// ===============================
+// INGEST: WORKOUT LOG
+// ===============================
+
+function ingestWorkoutLogSheet_(wlSheet, stagingSheet, existingSet) {
+  const values = wlSheet.getDataRange().getValues();
+  if (!values || values.length < 2) return 0;
+
+  const header = values[0].map(h => String(h).trim());
+  const idx = headerIndexesWorkoutLog_(header);
+
+  const toAppend = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (!r || r.length === 0) continue;
+
+    const d = parseDateFlexible_(r[idx.date]);
+    if (!d) continue;
+    const dateKey = formatDate_(d);
+
+    const workoutDuration = Number(r[idx.workoutDuration]); // seconds
+    const workout  = String(r[idx.workout] ?? "").trim();
+    const exercise = String(r[idx.exercise] ?? "").trim();
+    const setType  = String(r[idx.setType] ?? "").trim();
+
+    const weight = Number(r[idx.weight]);
+    const reps   = Number(r[idx.reps]);
+    const rir    = (r[idx.rir] === "" || r[idx.rir] === null || r[idx.rir] === undefined) ? "" : Number(r[idx.rir]);
+
+    if (!workout || !exercise || !setType) continue;
+    if (!isFinite(workoutDuration)) continue;
+
+    // Allow timed / bodyweight oddities: require at least one of weight/reps numeric
+    const wOk = isFinite(weight);
+    const rOk = isFinite(reps);
+    if (!wOk && !rOk) continue;
+
+    const weightOut = wOk ? weight : "";
+    const repsOut   = rOk ? reps   : "";
+
+    if (rir !== "" && !isFinite(rir)) continue;
+
+    const key = makeWorkoutKey_(dateKey, workout, exercise, setType, weightOut, repsOut, rir);
+    if (existingSet.has(key)) continue;
+
+    toAppend.push([dateKey, workoutDuration, workout, exercise, setType, weightOut, repsOut, rir]);
+    existingSet.add(key);
+  }
+
+  if (toAppend.length > 0) {
+    stagingSheet.getRange(stagingSheet.getLastRow() + 1, 1, toAppend.length, 8).setValues(toAppend);
+  }
+
+  return toAppend.length;
+}
+
+function headerIndexesWorkoutLog_(headerRow) {
+  const hdr = headerRow.map(h => String(h).trim());
+  const low = hdr.map(h => h.toLowerCase());
+
+  const findAny = (candidates, label, required = true) => {
+    for (const c of candidates) {
+      const i = hdr.indexOf(c);
+      if (i !== -1) return i;
+    }
+    const candLow = candidates.map(c => c.toLowerCase());
+    for (let i = 0; i < low.length; i++) {
+      for (const c of candLow) {
+        if (low[i] === c || low[i].includes(c)) return i;
+      }
+    }
+    if (required) throw new Error(`Missing Workout Log column: ${label}. Found: ${hdr.join(", ")}`);
+    return -1;
+  };
+
+  return {
+    date:            findAny(["Date"], "Date", true),
+    workoutDuration: findAny(["Workout Duration", "Workout Duration (s)", "Workout Duration (sec)", "Duration"], "Workout Duration", true),
+    workout:         findAny(["Workout"], "Workout", true),
+    exercise:        findAny(["Exercise"], "Exercise", true),
+    setType:         findAny(["Set Type", "SetType"], "Set Type", true),
+    weight:          findAny(["Weight (lbs)", "Weight", "Load", "Weight (kg)"], "Weight", true),
+    reps:            findAny(["Reps", "Repetitions"], "Reps", true),
+    rir:             findAny(["RIR", "Reps in Reserve"], "RIR", false),
+  };
+}
+
+function buildWorkoutExistingKeySet_(sheet) {
+  const s = new Set();
+  const last = sheet.getLastRow();
+  if (last < 2) return s;
+
+  const values = sheet.getRange(2, 1, last - 1, 8).getValues();
+  values.forEach(r => {
+    const dateKey  = String(r[0] ?? "").trim();
+    const workout  = String(r[2] ?? "").trim();
+    const exercise = String(r[3] ?? "").trim();
+    const setType  = String(r[4] ?? "").trim();
+
+    const weight = (r[5] === "" || r[5] === null || r[5] === undefined) ? "" : Number(r[5]);
+    const reps   = (r[6] === "" || r[6] === null || r[6] === undefined) ? "" : Number(r[6]);
+    const rir    = (r[7] === "" || r[7] === null || r[7] === undefined) ? "" : Number(r[7]);
+
+    if (!dateKey || !workout || !exercise || !setType) return;
+
+    const w = (isFinite(weight) ? weight : "");
+    const rp = (isFinite(reps) ? reps : "");
+    const rr = (rir === "" || isFinite(rir) ? rir : "");
+
+    s.add(makeWorkoutKey_(dateKey, workout, exercise, setType, w, rp, rr));
+  });
+
+  return s;
+}
+
+function makeWorkoutKey_(dateKey, workout, exercise, setType, weight, reps, rir) {
+  const w  = (weight === "" ? "" : String(weight));
+  const r  = (reps === ""   ? "" : String(reps));
+  const rr = (rir === ""    ? "" : String(rir));
+  return [
+    String(dateKey).trim(),
+    String(workout).trim().toLowerCase(),
+    String(exercise).trim().toLowerCase(),
+    String(setType).trim().toLowerCase(),
+    w,
+    r,
+    rr
+  ].join("|");
+}
+
+// ===============================
+// WEEKLY REBUILDS (BODYCOMP + ENERGY)
+// ===============================
+
+function rebuildWeeklyBodyComp_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const staging = mustGetSheet_(ss, STAGING_RENPHO_SHEET_NAME);
+  const weekly  = mustGetSheet_(ss, WEEKLY_BODYCOMP_SHEET);
+
+  const lastRow = staging.getLastRow();
+  if (lastRow < 2) {
+    clearSheetButKeepHeader_(weekly);
+    return;
+  }
+
+  const raw = staging.getRange(2, 1, lastRow - 1, 4).getValues();
+  const groups = new Map();
+
+  raw.forEach(r => {
+    const dt = r[0];
+    if (!dt) return;
+
+    const d = parseDateOnly_(dt);
+    if (!d) return;
+
+    const reportMonday = getReportMonday_(d);
+    const key = formatDate_(reportMonday);
+
+    const w   = Number(r[1]);
+    const bf  = Number(r[2]);
+    const ffm = Number(r[3]);
+    if (![w, bf, ffm].every(isFinite)) return;
+
+    if (!groups.has(key)) groups.set(key, { w: 0, bf: 0, ffm: 0, n: 0 });
+    const g = groups.get(key);
+    g.w += w; g.bf += bf; g.ffm += ffm; g.n += 1;
+  });
+
+  const keys = Array.from(groups.keys()).sort();
+  const out = keys.map(k => {
+    const g = groups.get(k);
+    return [k, round_(g.w / g.n, 2), round_(g.bf / g.n, 2), round_(g.ffm / g.n, 2)];
+  });
+
+  clearSheetButKeepHeader_(weekly);
+  if (out.length > 0) weekly.getRange(2, 1, out.length, 4).setValues(out);
+}
+
+function rebuildWeeklyEnergyFromDaily_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const daily  = mustGetSheet_(ss, DAILY_ENERGY_SHEET);
+  const weekly = mustGetSheet_(ss, WEEKLY_ENERGY_SHEET);
+
+  const lastRow = daily.getLastRow();
+  if (lastRow < 2) {
+    clearSheetButKeepHeader_(weekly);
+    return;
+  }
+
+  const raw = daily.getRange(2, 1, lastRow - 1, 17).getValues();
+  const groups = new Map();
+
+  raw.forEach(r => {
+    const d = parseDateFlexible_(r[0]);
+    if (!d) return;
+
+    const calories = Number(r[2]);
+    const calTarget = Number(r[4]);
+
+    // Only count days where calories logged
+    if (!isFinite(calories) || calories <= 0) return;
+
+    const key = formatDate_(getReportMonday_(d));
+
+    const expenditure = Number(r[3]);
+    const protein = Number(r[6]);
+    const carbs = Number(r[7]);
+    const fat = Number(r[8]);
+    const pAdh = Number(r[12]);
+    const eAdh = Number(r[13]);
+    const weight = Number(r[14]);
+    const trendW = Number(r[15]);
+    const steps = Number(r[16]);
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        n: 0,
+        cal: 0, exp: 0, calT: 0, calTN: 0,
+        p: 0, c: 0, f: 0,
+        pAdh: 0, eAdh: 0, adhN: 0,
+        w: 0, wN: 0,
+        tw: 0, twN: 0,
+        steps: 0, stepsN: 0
+      });
+    }
+
+    const g = groups.get(key);
+    g.n += 1;
+
+    g.cal += calories;
+
+    if (isFinite(expenditure)) g.exp += expenditure;
+    if (isFinite(calTarget) && calTarget > 0) { g.calT += calTarget; g.calTN += 1; }
+
+    if (isFinite(protein)) g.p += protein;
+    if (isFinite(carbs))   g.c += carbs;
+    if (isFinite(fat))     g.f += fat;
+
+    if (isFinite(weight) && weight > 0) { g.w += weight; g.wN += 1; }
+    if (isFinite(trendW) && trendW > 0) { g.tw += trendW; g.twN += 1; }
+
+    if (isFinite(steps)) { g.steps += steps; g.stepsN += 1; }
+
+    if (isFinite(pAdh)) g.pAdh += pAdh;
+    if (isFinite(eAdh)) g.eAdh += eAdh;
+    g.adhN += 1;
+  });
+
+  const keys = Array.from(groups.keys()).sort();
+  if (keys.length === 0) {
+    clearSheetButKeepHeader_(weekly);
+    return;
+  }
+
+  const out = keys.map(k => {
+    const g = groups.get(k);
+
+    const avgCalories = g.cal / g.n;
+    const avgExp      = (g.n > 0) ? (g.exp / g.n) : 0;
+    const avgTarget   = (g.calTN > 0) ? (g.calT / g.calTN) : 0;
+    const avgScaleW   = (g.wN > 0) ? (g.w / g.wN) : 0;
+    const avgTrendW   = (g.twN > 0) ? (g.tw / g.twN) : 0;
+    const avgSteps    = (g.stepsN > 0) ? (g.steps / g.stepsN) : 0;
+
+    const avgPAdh = (g.adhN > 0) ? (g.pAdh / g.adhN) : "";
+    const avgEAdh = (g.adhN > 0) ? (g.eAdh / g.adhN) : "";
+
+    return [
+      k,
+      g.n,
+      round_(avgCalories, 0),
+      round_(avgExp, 0),
+      round_(avgTarget, 0),
+      (avgExp ? round_(avgCalories - avgExp, 0) : ""),
+      round_(g.p / g.n, 1),
+      round_(g.c / g.n, 1),
+      round_(g.f / g.n, 1),
+      (avgPAdh === "" ? "" : round_(avgPAdh, 3)),
+      (avgEAdh === "" ? "" : round_(avgEAdh, 3)),
+      round_(avgScaleW, 2),
+      round_(avgTrendW, 2),
+      round_(avgSteps, 0),
+    ];
+  });
+
+  clearSheetButKeepHeader_(weekly);
+  weekly.getRange(2, 1, out.length, 14).setValues(out);
+}
+
+// ===============================
+// TRAINING REBUILDS (SETS/VOLUME/WEEKLY)
+// ===============================
+
+function rebuildMuscleSets_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const wl = mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET);
+  const mapSheet = mustGetSheet_(ss, EXERCISE_MAP_SHEET);
+  const outSheet = mustGetSheet_(ss, STAGING_MUSCLE_SETS_SHEET);
+
+  const map = loadExerciseMap_(mapSheet);
+
+  const last = wl.getLastRow();
+  clearSheetButKeepHeader_(outSheet);
+  if (last < 2) return;
+
+  const rows = wl.getRange(2, 1, last - 1, 8).getValues();
+  const daily = new Map();
+
+  rows.forEach(r => {
+    const d = parseDateFlexible_(r[0]);
+    if (!d) return;
+    const dateKey = formatDate_(d);
+
+    const exercise = String(r[3] ?? "").trim();
+    const setType  = String(r[4] ?? "").trim();
+    if (!isWorkingSetType_(setType)) return;
+
+    const m = map.get(normalizeExercise_(exercise));
+    if (!m || !m.includeForSets) return;
+
+    if (!daily.has(dateKey)) daily.set(dateKey, blankMuscleAgg_());
+    const agg = daily.get(dateKey);
+
+    if (m.primary)   agg[m.primary] += 1;
+    if (m.secondary) agg[m.secondary] += m.secondaryWeight;
+    if (m.tertiary)  agg[m.tertiary] += m.tertiaryWeight;
+  });
+
+  const dates = Array.from(daily.keys()).sort();
+  const out = dates.map(dateKey => {
+    const a = daily.get(dateKey);
+    return [
+      dateKey,
+      round_(a.chest, 2),
+      round_(a.back, 2),
+      round_(a.legs, 2),
+      round_(a.shoulders, 2),
+      round_(a.biceps, 2),
+      round_(a.triceps, 2),
+    ];
+  });
+
+  if (out.length > 0) outSheet.getRange(2, 1, out.length, 7).setValues(out);
+}
+
+function rebuildMuscleVolume_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const wl = mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET);
+  const mapSheet = mustGetSheet_(ss, EXERCISE_MAP_SHEET);
+  const outSheet = mustGetSheet_(ss, STAGING_MUSCLE_VOL_SHEET);
+
+  const map = loadExerciseMap_(mapSheet);
+
+  const last = wl.getLastRow();
+  clearSheetButKeepHeader_(outSheet);
+  if (last < 2) return;
+
+  const rows = wl.getRange(2, 1, last - 1, 8).getValues();
+  const daily = new Map();
+
+  rows.forEach(r => {
+    const d = parseDateFlexible_(r[0]);
+    if (!d) return;
+    const dateKey = formatDate_(d);
+
+    const exercise = String(r[3] ?? "").trim();
+    const setType  = String(r[4] ?? "").trim();
+    if (!isWorkingSetType_(setType)) return;
+
+    const weight = Number(r[5]);
+    const reps   = Number(r[6]);
+    if (![weight, reps].every(isFinite)) return;
+
+    const m = map.get(normalizeExercise_(exercise));
+    if (!m || !m.includeForVolume) return;
+
+    const tonnage = weight * reps;
+
+    if (!daily.has(dateKey)) daily.set(dateKey, blankMuscleAgg_());
+    const agg = daily.get(dateKey);
+
+    if (m.primary)   agg[m.primary] += tonnage;
+    if (m.secondary) agg[m.secondary] += tonnage * m.secondaryWeight;
+    if (m.tertiary)  agg[m.tertiary] += tonnage * m.tertiaryWeight;
+  });
+
+  const dates = Array.from(daily.keys()).sort();
+  const out = dates.map(dateKey => {
+    const a = daily.get(dateKey);
+    return [
+      dateKey,
+      round_(a.chest, 1),
+      round_(a.back, 1),
+      round_(a.legs, 1),
+      round_(a.shoulders, 1),
+      round_(a.biceps, 1),
+      round_(a.triceps, 1),
+    ];
+  });
+
+  if (out.length > 0) outSheet.getRange(2, 1, out.length, 7).setValues(out);
+}
+
+function rebuildWeeklyTraining_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const wl = mustGetSheet_(ss, STAGING_WORKOUT_LOG_SHEET);
+  const setsDaily = mustGetSheet_(ss, STAGING_MUSCLE_SETS_SHEET);
+  const volDaily  = mustGetSheet_(ss, STAGING_MUSCLE_VOL_SHEET);
+  const weeklyOut = mustGetSheet_(ss, WEEKLY_TRAINING_SHEET);
+
+  clearSheetButKeepHeader_(weeklyOut);
+
+  const wlLast = wl.getLastRow();
+  if (wlLast < 2) return;
+
+  const wlRows = wl.getRange(2, 1, wlLast - 1, 8).getValues();
+
+  const weekly = new Map();           // weekKey -> agg
+  const sessionDurations = new Map(); // sessionKey -> max seconds
+
+  wlRows.forEach(r => {
+    const d = parseDateFlexible_(r[0]);
+    if (!d) return;
+
+    const dateKey = formatDate_(d);
+    const durationSec = Number(r[1]);
+    const workout = String(r[2] ?? "").trim();
+
+    // Track workout session durations (take max per session)
+    if (workout && isFinite(durationSec)) {
+      const sk = makeSessionKey_(dateKey, workout);
+      const prev = sessionDurations.get(sk) ?? 0;
+      if (durationSec > prev) sessionDurations.set(sk, durationSec);
+    }
+
+    const setType = String(r[4] ?? "").trim();
+    if (!isWorkingSetType_(setType)) return;
+
+    const weekKey = formatDate_(getReportMonday_(d));
+    const rir = (r[7] === "" || r[7] === null || r[7] === undefined) ? null : Number(r[7]);
+
+    if (!weekly.has(weekKey)) weekly.set(weekKey, blankWeeklyAgg_());
+    const g = weekly.get(weekKey);
+
+    g.sets_total += 1;
+    g.workoutKeys.add(makeSessionKey_(dateKey, workout));
+
+    if (rir !== null && isFinite(rir)) {
+      g.rirSum += rir;
+      g.rirN += 1;
+    }
+  });
+
+  // Add minutes totals from sessionDurations
+  for (const [sessionKey, seconds] of sessionDurations.entries()) {
+    const datePart = sessionKey.split("|")[0];
+    const d = parseDateFlexible_(datePart);
+    if (!d) continue;
+
+    const weekKey = formatDate_(getReportMonday_(d));
+    if (!weekly.has(weekKey)) weekly.set(weekKey, blankWeeklyAgg_());
+
+    weekly.get(weekKey).training_minutes_total += (seconds / 60);
+  }
+
+  // Add sets/volume from daily muscle sheets
+  addDailySheetToWeekly_(volDaily, weekly, "volume");
+  addDailySheetToWeekly_(setsDaily, weekly, "sets");
+
+  const HIT_THRESHOLD = 4;
+  const keys = Array.from(weekly.keys()).sort();
+
+  const out = keys.map(k => {
+    const g = weekly.get(k);
+    const workoutsCompleted = g.workoutKeys.size;
+    const avgRIR = g.rirN > 0 ? (g.rirSum / g.rirN) : "";
+
+    const musclesHit = ["chest","back","legs","shoulders","biceps","triceps"]
+      .filter(m => g.muscles[m] >= HIT_THRESHOLD).length;
+
+    const minutesTotal = g.training_minutes_total;
+    const avgWorkoutMinutes = workoutsCompleted > 0 ? (minutesTotal / workoutsCompleted) : 0;
+
+    return [
+      k,
+      g.sets_total,
+      round_(g.volume_total, 1),
+      workoutsCompleted,
+      (avgRIR === "" ? "" : round_(avgRIR, 2)),
+      musclesHit,
+      round_(minutesTotal, 1),
+      round_(avgWorkoutMinutes, 1)
+    ];
+  });
+
+  if (out.length > 0) weeklyOut.getRange(2, 1, out.length, 8).setValues(out);
+}
+
+function addDailySheetToWeekly_(sheet, weeklyMap, mode) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+
+  const rows = sheet.getRange(2, 1, last - 1, 7).getValues();
+
+  rows.forEach(r => {
+    const d = parseDateFlexible_(r[0]);
+    if (!d) return;
+
+    const weekKey = formatDate_(getReportMonday_(d));
+    if (!weeklyMap.has(weekKey)) weeklyMap.set(weekKey, blankWeeklyAgg_());
+    const g = weeklyMap.get(weekKey);
+
+    const chest     = Number(r[1]) || 0;
+    const back      = Number(r[2]) || 0;
+    const legs      = Number(r[3]) || 0;
+    const shoulders = Number(r[4]) || 0;
+    const biceps    = Number(r[5]) || 0;
+    const triceps   = Number(r[6]) || 0;
+
+    if (mode === "volume") {
+      g.volume_total += (chest + back + legs + shoulders + biceps + triceps);
+    } else if (mode === "sets") {
+      g.muscles.chest     += chest;
+      g.muscles.back      += back;
+      g.muscles.legs      += legs;
+      g.muscles.shoulders += shoulders;
+      g.muscles.biceps    += biceps;
+      g.muscles.triceps   += triceps;
+    }
+  });
+}
+
+// ===============================
+// EXERCISE MAP
+// ===============================
+
+function loadExerciseMap_(mapSheet) {
+  const last = mapSheet.getLastRow();
+  const map = new Map();
+  if (last < 2) return map;
+
+  const values = mapSheet.getRange(2, 1, last - 1, mapSheet.getLastColumn()).getValues();
+
+  values.forEach(r => {
+    const exercise = String(r[0] ?? "").trim();
+    if (!exercise) return;
+
+    const primary   = String(r[1] ?? "").trim().toLowerCase();
+    const secondary = String(r[2] ?? "").trim().toLowerCase();
+    const tertiary  = String(r[3] ?? "").trim().toLowerCase();
+
+    const secondaryWeight = isFinite(Number(r[4])) ? Number(r[4]) : 0;
+    const tertiaryWeight  = isFinite(Number(r[5])) ? Number(r[5]) : 0;
+
+    const includeForSets   = truthy_(r[6]);
+    const includeForVolume = truthy_(r[7]);
+
+    map.set(normalizeExercise_(exercise), {
+      primary: validMuscle_(primary) ? primary : "",
+      secondary: validMuscle_(secondary) ? secondary : "",
+      tertiary: validMuscle_(tertiary) ? tertiary : "",
+      secondaryWeight: secondaryWeight || 0,
+      tertiaryWeight: tertiaryWeight || 0,
+      includeForSets,
+      includeForVolume
+    });
+  });
+
+  return map;
+}
+
+function normalizeExercise_(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function validMuscle_(m) {
+  return ["chest","back","legs","shoulders","biceps","triceps"].includes(m);
+}
+
+function blankMuscleAgg_() {
+  return { chest: 0, back: 0, legs: 0, shoulders: 0, biceps: 0, triceps: 0 };
+}
+
+function blankWeeklyAgg_() {
+  return {
+    sets_total: 0,
+    volume_total: 0,
+    workoutKeys: new Set(),
+    rirSum: 0,
+    rirN: 0,
+    muscles: blankMuscleAgg_(),
+    training_minutes_total: 0
+  };
+}
+
+function isWorkingSetType_(setType) {
+  const t = String(setType || "").trim().toLowerCase();
+  if (!t) return false;
+  return !t.includes("warm") && !t.includes("cool") && !t.includes("cardio");
+}
+
+function makeSessionKey_(dateKey, workout) {
+  return `${String(dateKey).trim()}|${String(workout).trim().toLowerCase()}`;
+}
+
+// ===============================
+// DEDUPE HELPERS
+// ===============================
+
+function buildExistingKeySet_(sheet, keyCol1Based, mode) {
+  const s = new Set();
+  const last = sheet.getLastRow();
+  if (last < 2) return s;
+
+  const col = keyCol1Based;
+  const values = sheet.getRange(2, col, last - 1, 1).getValues();
+
+  values.forEach(r => {
+    const v = r[0];
+    if (v === "" || v === null || v === undefined) return;
+
+    if (mode === "date") {
+      const d = parseDateFlexible_(v);
+      if (!d) return;
+      s.add(formatDate_(d));
+    } else {
+      s.add(String(v).trim());
+    }
+  });
+
+  return s;
+}
+
+// ===============================
+// FILE + DRIVE HELPERS (XLSX -> Google Sheet)
+// ===============================
+
+function convertXlsxToGoogleSheet_WithRetry_(fileId, newTitle, retries) {
+  let lastErr = null;
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      return convertXlsxToGoogleSheet_(fileId, newTitle);
+    } catch (e) {
+      lastErr = e;
+      Utilities.sleep(750 * (i + 1));
+    }
+  }
+  throw lastErr || new Error("convertXlsxToGoogleSheet_WithRetry_: unknown error");
+}
+
+function convertXlsxToGoogleSheet_(fileId, newTitle) {
+  // Requires Advanced Google Services -> Drive API enabled
+  const resource = { title: newTitle, mimeType: MimeType.GOOGLE_SHEETS };
+  const copied = Drive.Files.copy(resource, fileId);
+  return copied.id;
+}
+
+function moveToProcessed_(file, processedFolder) {
+  try {
+    file.moveTo(processedFolder);
+  } catch (e) {
+    Logger.log(`moveToProcessed_ failed for ${file.getName()}: ${e}`);
+  }
+}
+
+// ===============================
+// SHEET-FINDING + TABLE-READ HELPERS
+// ===============================
+
+function findSheetByKeywords_(ss, keywords, fallbackName) {
+  const sheets = ss.getSheets();
+  const want = keywords.map(k => String(k).toLowerCase());
+
+  // exact fallback first
+  if (fallbackName) {
+    const exact = ss.getSheetByName(fallbackName);
+    if (exact) return exact;
+  }
+
+  // keyword match
+  for (const sh of sheets) {
+    const name = String(sh.getName() || "").toLowerCase();
+    let ok = true;
+    for (const k of want) {
+      if (!name.includes(k)) { ok = false; break; }
+    }
+    if (ok) return sh;
+  }
+  return null;
+}
+
+function readTable_(sheet) {
+  const values = sheet.getDataRange().getValues();
+  if (!values || values.length === 0) {
+    return { header: [], body: [], values: [] };
+  }
+  const header = values[0].map(h => String(h).trim());
+  const body = values.slice(1);
+  return { header, body, values };
+}
+
+// ===============================
+// PROGRAM SETTINGS -> TARGETS TIMELINE
+// ===============================
+
+function buildTargetsTimelineFromProgramSettings_(psSheet) {
+  const values = psSheet.getDataRange().getValues();
+  if (!values || values.length < 2) return [];
+
+  const header = values[0].map(h => String(h).trim());
+  const lower  = header.map(h => h.toLowerCase());
+
+  const idxDate = lower.indexOf("date");
+  const idxCals = lower.findIndex(h => h.includes("calories"));
+  const idxP    = lower.findIndex(h => h.includes("protein"));
+  const idxC    = lower.findIndex(h => h.includes("carb"));
+  const idxF    = lower.findIndex(h => h.includes("fat"));
+
+  if (idxDate === -1 || idxCals === -1 || idxP === -1 || idxC === -1 || idxF === -1) {
+    return [];
+  }
+
+  const out = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    const d = parseDateFlexible_(r[idxDate]);
+    if (!d) continue;
+
+    const cals = Number(r[idxCals]);
+    const p    = Number(r[idxP]);
+    const c    = Number(r[idxC]);
+    const f    = Number(r[idxF]);
+
+    if (![cals, p, c, f].every(isFinite)) continue;
+
+    out.push({
+      startDate: new Date(d.getFullYear(), d.getMonth(), d.getDate()),
+      calories: cals, protein: p, carbs: c, fat: f
+    });
+  }
+
+  out.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+  return out;
+}
+
+function pickTargetsForDate_(timeline, dateObj) {
+  if (!timeline || timeline.length === 0) return null;
+
+  const d0 = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
+
+  let best = null;
+  for (const t of timeline) {
+    const t0 = t.startDate.getTime();
+    if (t0 <= d0) best = t;
+    else break;
+  }
+  return best;
+}
+
+// ===============================
+// DATE + NORMALISATION HELPERS
+// ===============================
+
+function normalizeHeader_(h) {
+  return String(h || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s()%.-]/g, "");
+}
+
+function parseDateFlexible_(v) {
+  if (v instanceof Date && !isNaN(v.getTime())) return v;
+
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+
+  // ISO-ish yyyy-mm-dd or yyyy/mm/dd
+  const m1 = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (m1) {
+    const y = Number(m1[1]), mo = Number(m1[2]) - 1, da = Number(m1[3]);
+    const d = new Date(y, mo, da);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const d2 = new Date(s);
+  if (!isNaN(d2.getTime())) return d2;
+
+  return null;
+}
+
+function parseDateOnly_(dtValue) {
+  if (dtValue instanceof Date && !isNaN(dtValue.getTime())) {
+    return new Date(dtValue.getFullYear(), dtValue.getMonth(), dtValue.getDate());
+  }
+
+  const s = String(dtValue || "").trim();
+  if (!s) return null;
+
+  const datePart = s.split(" ")[0];
+  return parseDateFlexible_(datePart);
+}
+
+function formatDate_(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${da}`;
+}
+
+function getReportMonday_(d) {
+  const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = dt.getDay(); // 0 Sun, 1 Mon, ...
+  const diff = (day === 0) ? -6 : (1 - day);
+  dt.setDate(dt.getDate() + diff);
+  return dt;
+}
+
+function truthy_(v) {
+  if (v === true) return true;
+  const s = String(v ?? "").trim().toLowerCase();
+  return (s === "true" || s === "yes" || s === "1" || s === "y");
+}
+
+// ===============================
+// DEBUG HELPERS
+// ===============================
+
+function debugRenphoInboxList10() {
+  const folder = DriveApp.getFolderById(RENPHO_INBOX_FOLDER_ID);
+
+  const arr = [];
+  const it = folder.getFiles();
+  while (it.hasNext()) {
+    const f = it.next();
+    arr.push({
+      name: f.getName(),
+      updated: f.getLastUpdated(),
+      id: f.getId(),
+      mime: f.getMimeType()
+    });
+  }
+
+  arr.sort((a,b) => b.updated - a.updated);
+  arr.slice(0, 10).forEach((x,i) => {
+    Logger.log(`#${i+1} ${x.updated} | ${x.mime} | ${x.name} | ${x.id}`);
+  });
+}
+
+function debugRenphoInboxFiles() {
+  const folder = DriveApp.getFolderById(RENPHO_INBOX_FOLDER_ID);
+
+  const files = folder.getFiles();
+  let n = 0;
+  let newest = null;
+  let newestName = "";
+  let newestId = "";
+
+  while (files.hasNext()) {
+    const f = files.next();
+    n++;
+    const t = f.getLastUpdated();
+    if (!newest || t > newest) {
+      newest = t;
+      newestName = f.getName();
+      newestId = f.getId();
+    }
+  }
+
+  Logger.log("Inbox file count: " + n);
+  Logger.log("Newest file updated: " + newest);
+  Logger.log("Newest file name: " + newestName);
+  Logger.log("Newest file id: " + newestId);
+}
