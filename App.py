@@ -39,7 +39,7 @@ creds = Credentials.from_service_account_info(
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(SHEET_ID)
 
-# ✅ Tab names
+# ✅ 
 WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
 WS_TRAIN_WEEKLY = "Weekly_Training"
@@ -50,6 +50,10 @@ WS_WORKOUT_LOG = "Staging_Workout_Log"
 
 # Food log staging
 WS_FOOD_LOG = "Staging_MacroFactor_FoodLog"
+# Optional MacroFactor muscle group staging
+WS_MUSCLE_SETS = "Staging_Muscle_Sets"
+WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
+
 
 # ============================================================
 # Helpers
@@ -215,6 +219,35 @@ def safe_domain(values: pd.Series, preferred_domain: list[float], pad_pct: float
         return preferred_domain
     pad = max(1e-6, (vmax - vmin) * pad_pct)
     return [vmin - pad, vmax + pad]
+
+def coalesce_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Return first column name that exists in df, else None."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+def mean_if_present(df: pd.DataFrame, col: str | None):
+    if df.empty or not col or col not in df.columns:
+        return pd.NA
+    return pd.to_numeric(df[col], errors="coerce").mean()
+
+def sum_if_present(df: pd.DataFrame, col: str | None):
+    if df.empty or not col or col not in df.columns:
+        return pd.NA
+    return pd.to_numeric(df[col], errors="coerce").sum()
+
+def parse_time_to_hour(series: pd.Series) -> pd.Series:
+    """
+    Parses 'Time' strings from MacroFactor Food Log.
+    Handles '7:30 PM' and '19:30' and returns hour (0-23).
+    """
+    s = series.astype(str).str.strip()
+    t1 = pd.to_datetime(s, format="%I:%M %p", errors="coerce")
+    t2 = pd.to_datetime(s, format="%H:%M", errors="coerce")
+    t = t1.fillna(t2)
+    return t.dt.hour
+
 
 # ============================================================
 # Load BODY weekly
@@ -1124,3 +1157,306 @@ else:
                 .properties(height=260)
             )
             st.altair_chart(macro_chart, use_container_width=True)
+
+# ============================================================
+# EXTRA PANELS: Micros flags + Protein distribution + Muscle balance + Consistency
+# ============================================================
+st.header("🧂 Micronutrients + Quality flags")
+
+# --- Pull micros from Daily_Energy (best-effort: different exports use different column names)
+# NOTE: We assume daily_energy_week_logged already exists above.
+micros = daily_energy_week_logged.copy() if "daily_energy_week_logged" in globals() else pd.DataFrame()
+
+# Candidate columns (supports multiple naming conventions)
+col_fiber = coalesce_col(micros, ["fiber_g", "fibre_g", "Fiber (g)", "Fibre (g)"])
+col_sodium = coalesce_col(micros, ["sodium_mg", "Sodium (mg)"])
+col_potassium = coalesce_col(micros, ["potassium_mg", "Potassium (mg)"])
+col_caffeine = coalesce_col(micros, ["caffeine_mg", "Caffeine (mg)"])
+
+# Targets (optional)
+col_fiber_t = coalesce_col(micros, ["fiber_target_g", "fibre_target_g", "Target Fiber (g)", "Target Fibre (g)"])
+col_sodium_t = coalesce_col(micros, ["sodium_target_mg", "Target Sodium (mg)"])
+col_potassium_t = coalesce_col(micros, ["potassium_target_mg", "Target Potassium (mg)"])
+col_caffeine_t = coalesce_col(micros, ["caffeine_target_mg", "Target Caffeine (mg)"])
+
+# Convert to numeric if present
+micros = to_num(micros, [c for c in [col_fiber, col_sodium, col_potassium, col_caffeine,
+                                    col_fiber_t, col_sodium_t, col_potassium_t, col_caffeine_t] if c])
+
+# Show weekly averages (this week so far)
+m1, m2, m3, m4 = st.columns(4)
+
+fiber_avg = mean_if_present(micros, col_fiber)
+sodium_avg = mean_if_present(micros, col_sodium)
+potassium_avg = mean_if_present(micros, col_potassium)
+caffeine_avg = mean_if_present(micros, col_caffeine)
+
+with m1:
+    st.metric("Fibre (avg/day)", metric_or_dash(fiber_avg, "{:.0f} g"))
+with m2:
+    st.metric("Sodium (avg/day)", metric_or_dash(sodium_avg, "{:.0f} mg"))
+with m3:
+    st.metric("Potassium (avg/day)", metric_or_dash(potassium_avg, "{:.0f} mg"))
+with m4:
+    st.metric("Caffeine (avg/day)", metric_or_dash(caffeine_avg, "{:.0f} mg"))
+
+# Red-flag rules (editable)
+# Defaults: fibre < 25g, sodium > 2500mg, potassium < 3000mg, caffeine > 400mg
+flags = []
+def add_flag(name, value, rule_desc, is_flag):
+    flags.append({
+        "metric": name,
+        "avg_per_day": value if pd.notna(value) else pd.NA,
+        "rule": rule_desc,
+        "flag": bool(is_flag) if pd.notna(value) else False
+    })
+
+add_flag("Fibre", fiber_avg, "Flag if < 25 g", pd.notna(fiber_avg) and fiber_avg < 25)
+add_flag("Sodium", sodium_avg, "Flag if > 2500 mg", pd.notna(sodium_avg) and sodium_avg > 2500)
+add_flag("Potassium", potassium_avg, "Flag if < 3000 mg", pd.notna(potassium_avg) and potassium_avg < 3000)
+add_flag("Caffeine", caffeine_avg, "Flag if > 400 mg", pd.notna(caffeine_avg) and caffeine_avg > 400)
+
+flags_df = pd.DataFrame(flags)
+if not flags_df.empty:
+    st.subheader("Quality flags (this week so far)")
+    out = flags_df.copy()
+    out["avg_per_day"] = pd.to_numeric(out["avg_per_day"], errors="coerce").round(0)
+    st.dataframe(out, hide_index=True)
+
+st.divider()
+
+# ============================================================
+# Protein distribution by meal window (Food Log)
+# ============================================================
+st.header("🥩 Protein distribution (meal windows)")
+
+# We already built food_view above (filtered by selected date range).
+# For "this week so far", we want Monday -> today.
+food_all = load_sheet(WS_FOOD_LOG)
+
+if not food_all.empty:
+    # Normalise schema as you already do in Food patterns
+    food2 = food_all.copy()
+
+    staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
+    raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
+
+    if staging_cols.issubset(set(food2.columns)):
+        food2 = food2.rename(columns={
+            "calories_kcal": "calories",
+            "protein_g": "protein",
+            "carbs_g": "carbs",
+            "fat_g": "fat",
+        })
+    elif raw_cols.issubset(set(food2.columns)):
+        food2 = food2.rename(columns={
+            "Date": "date",
+            "Time": "time",
+            "Food Name": "food_name",
+            "Calories (kcal)": "calories",
+            "Protein (g)": "protein",
+            "Carbs (g)": "carbs",
+            "Fat (g)": "fat",
+        })
+    else:
+        st.caption("Food log schema not recognized for protein distribution.")
+        food2 = pd.DataFrame()
+
+    if not food2.empty:
+        food2 = normalise_date_col(food2, "date")
+        food2 = to_num(food2, ["calories", "protein", "carbs", "fat"])
+
+        # This week so far filter
+        food_week = filter_range(food2, week_start, week_end, "date")
+
+        if food_week.empty:
+            st.caption("No food log rows this week so far.")
+        else:
+            # Bucket by meal window using time -> hour
+            hour = parse_time_to_hour(food_week["time"]) if "time" in food_week.columns else pd.Series([pd.NA] * len(food_week))
+            food_week = food_week.copy()
+            food_week["hour"] = hour
+
+            def meal_bucket(h):
+                if pd.isna(h):
+                    return "Unknown"
+                h = int(h)
+                if 5 <= h < 11:
+                    return "Breakfast"
+                if 11 <= h < 15:
+                    return "Lunch"
+                if 15 <= h < 19:
+                    return "Dinner"
+                return "Evening"
+
+            food_week["meal_bucket"] = food_week["hour"].apply(meal_bucket)
+
+            dist = (
+                food_week.groupby("meal_bucket", as_index=False)[["protein", "calories", "carbs", "fat"]]
+                .sum(numeric_only=True)
+            )
+
+            # Order buckets nicely
+            order = ["Breakfast", "Lunch", "Dinner", "Evening", "Unknown"]
+            dist["meal_bucket"] = pd.Categorical(dist["meal_bucket"], categories=order, ordered=True)
+            dist = dist.sort_values("meal_bucket")
+
+            cA, cB = st.columns([1, 1.4])
+
+            with cA:
+                st.subheader("This week so far (totals)")
+                st.dataframe(dist.round(0), hide_index=True)
+
+            with cB:
+                # Protein share chart
+                pdist = dist[dist["protein"].notna()].copy()
+                if not pdist.empty:
+                    pdist["protein_pct"] = pdist["protein"] / pdist["protein"].sum() * 100
+                    chart = alt.Chart(pdist).mark_bar().encode(
+                        x=alt.X("meal_bucket:N", title="Meal window"),
+                        y=alt.Y("protein_pct:Q", title="Protein share (%)"),
+                        tooltip=[
+                            alt.Tooltip("meal_bucket:N"),
+                            alt.Tooltip("protein:Q", title="Protein (g)", format=".0f"),
+                            alt.Tooltip("protein_pct:Q", title="Share (%)", format=".0f"),
+                        ],
+                    ).properties(height=280)
+                    st.subheader("Protein share by meal window")
+                    st.altair_chart(chart, use_container_width=True)
+else:
+    st.caption("Food log tab is empty/missing.")
+
+st.divider()
+
+# ============================================================
+# Muscle-group balance (Sets + Volume)
+# ============================================================
+st.header("💪 Muscle-group balance")
+
+mus_sets = load_sheet(WS_MUSCLE_SETS) if "WS_MUSCLE_SETS" in globals() else pd.DataFrame()
+mus_vol = load_sheet(WS_MUSCLE_VOLUME) if "WS_MUSCLE_VOLUME" in globals() else pd.DataFrame()
+
+def normalise_muscle_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handles MacroFactor 'Muscle Groups - Sets/Volume' style exports.
+    Expected columns commonly include 'Date' plus one column per muscle group.
+    We'll normalise Date->date and keep numeric muscle columns.
+    """
+    if df.empty:
+        return df
+    out = df.copy()
+    if "Date" in out.columns and "date" not in out.columns:
+        out = out.rename(columns={"Date": "date"})
+    out = normalise_date_col(out, "date")
+    # Convert everything except date to numeric
+    for c in out.columns:
+        if c != "date":
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+mus_sets = normalise_muscle_table(mus_sets)
+mus_vol = normalise_muscle_table(mus_vol)
+
+# This week so far: Monday -> today
+ms_week = filter_range(mus_sets, week_start, week_end, "date") if not mus_sets.empty else pd.DataFrame()
+mv_week = filter_range(mus_vol, week_start, week_end, "date") if not mus_vol.empty else pd.DataFrame()
+
+def melt_muscles(df: pd.DataFrame, value_name: str) -> pd.DataFrame:
+    if df.empty or "date" not in df.columns:
+        return pd.DataFrame()
+    muscle_cols = [c for c in df.columns if c != "date"]
+    if not muscle_cols:
+        return pd.DataFrame()
+    m = df.melt("date", value_vars=muscle_cols, var_name="muscle", value_name=value_name)
+    m = m.dropna(subset=[value_name])
+    return m
+
+# Sum across the week for each muscle
+if not ms_week.empty:
+    ms_m = melt_muscles(ms_week, "sets")
+    ms_sum = ms_m.groupby("muscle", as_index=False)["sets"].sum().sort_values("sets", ascending=False)
+else:
+    ms_sum = pd.DataFrame()
+
+if not mv_week.empty:
+    mv_m = melt_muscles(mv_week, "volume")
+    mv_sum = mv_m.groupby("muscle", as_index=False)["volume"].sum().sort_values("volume", ascending=False)
+else:
+    mv_sum = pd.DataFrame()
+
+if ms_sum.empty and mv_sum.empty:
+    st.caption("No muscle-group sets/volume data found (tabs empty or missing).")
+else:
+    left, right = st.columns(2)
+
+    with left:
+        if not ms_sum.empty:
+            st.subheader("This week so far — Sets")
+            st.dataframe(ms_sum.round(0), hide_index=True)
+            chart = alt.Chart(ms_sum).mark_bar().encode(
+                x=alt.X("muscle:N", sort="-y", title="Muscle"),
+                y=alt.Y("sets:Q", title="Sets (sum)"),
+                tooltip=[alt.Tooltip("muscle:N"), alt.Tooltip("sets:Q", format=".0f")],
+            ).properties(height=300)
+            st.altair_chart(chart, use_container_width=True)
+
+    with right:
+        if not mv_sum.empty:
+            st.subheader("This week so far — Volume")
+            st.dataframe(mv_sum.round(0), hide_index=True)
+            chart = alt.Chart(mv_sum).mark_bar().encode(
+                x=alt.X("muscle:N", sort="-y", title="Muscle"),
+                y=alt.Y("volume:Q", title="Volume (sum)"),
+                tooltip=[alt.Tooltip("muscle:N"), alt.Tooltip("volume:Q", format=".0f")],
+            ).properties(height=300)
+            st.altair_chart(chart, use_container_width=True)
+
+st.divider()
+
+# ============================================================
+# Consistency score (week so far)
+# ============================================================
+st.header("✅ Consistency score (this week so far)")
+
+# Days elapsed this week (Mon->today inclusive)
+days_elapsed = (pd.Timestamp(week_end) - pd.Timestamp(week_start)).days + 1
+
+# Days logged from daily_energy_week_logged (already computed)
+days_logged = int(len(daily_energy_week_logged)) if "daily_energy_week_logged" in globals() and not daily_energy_week_logged.empty else 0
+
+# Workouts from workout_week logic above (fallback)
+workouts = 0
+minutes_total = pd.NA
+if "workout_week" in globals() and not workout_week.empty and "workout" in workout_week.columns:
+    wk = workout_week.copy()
+    wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
+    workouts = int(wk["session_key"].nunique())
+
+    if "workout_duration" in wk.columns:
+        # seconds -> minutes (matching your earlier assumption)
+        mins = pd.to_numeric(wk.groupby("session_key")["workout_duration"].max(), errors="coerce") / 60.0
+        minutes_total = float(mins.sum()) if mins.notna().any() else pd.NA
+
+# Steps avg (this week so far)
+steps_avg = pd.NA
+if "daily_energy_week_logged" in globals() and not daily_energy_week_logged.empty and "steps" in daily_energy_week_logged.columns:
+    steps_avg = pd.to_numeric(daily_energy_week_logged["steps"], errors="coerce").mean()
+
+log_pct = (days_logged / days_elapsed * 100) if days_elapsed > 0 else pd.NA
+
+s1, s2, s3, s4 = st.columns(4)
+with s1:
+    st.metric("Days elapsed", days_elapsed)
+with s2:
+    st.metric("Days logged", days_logged)
+with s3:
+    st.metric("Logged %", metric_or_dash(log_pct, "{:.0f}%"))
+with s4:
+    st.metric("Workouts", workouts)
+
+t1, t2 = st.columns(2)
+with t1:
+    st.metric("Training minutes", metric_or_dash(minutes_total, "{:.0f}"))
+with t2:
+    st.metric("Avg steps", metric_or_dash(steps_avg, "{:.0f}"))
+
