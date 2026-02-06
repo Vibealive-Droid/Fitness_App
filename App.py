@@ -646,17 +646,13 @@ workout_log = load_sheet(WS_WORKOUT_LOG)
 workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
 workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
-st.caption(f"workout_log rows: {len(workout_log)}")
 
+# ✅ workout_week must be a DataFrame
 workout_week = filter_range(workout_log, week_start, week_end, "date")
+workout_week = ensure_df(workout_week)
 
-
-workout_log = load_sheet(WS_WORKOUT_LOG)
-workout_log = normalise_workout_log_schema(workout_log)
-workout_log = normalise_date_col(workout_log, "date")
-workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
-
-workout_week = (workout_log, week_start, week_end, "date")
+# optional debug (remove later)
+# st.caption(f"workout_week type: {type(workout_week)} rows: {len(workout_week)}")
 
 c1, c2, c3, c4 = st.columns(4)
 
