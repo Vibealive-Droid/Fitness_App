@@ -641,6 +641,13 @@ daily_energy = to_num(daily_energy, [
 daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
 daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
+# --- Workout log (THIS WEEK SO FAR)
+workout_log = load_sheet(WS_WORKOUT_LOG)
+workout_log = normalise_workout_log_schema(workout_log)
+workout_log = normalise_date_col(workout_log, "date")
+workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
+st.caption(f"workout_log rows: {len(workout_log)}")
+
 workout_week = filter_range(workout_log, week_start, week_end, "date")
 
 
