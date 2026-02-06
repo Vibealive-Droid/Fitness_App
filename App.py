@@ -110,19 +110,18 @@ def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataF
     return df.loc[mask].copy()
 
 
-def date_for_table(df, col="date"):
-    # Handle None / wrong types safely
-    if df is None or not isinstance(df, pd.DataFrame) or df.shape[0] == 0:
-        return ""
+def date_for_table(df: pd.DataFrame, col="date") -> pd.DataFrame:
+    # Return empty DF safely if input is bad
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
 
     if col not in df.columns:
-        return ""
+        return df.copy()
 
-    s = pd.to_datetime(df[col], errors="coerce")
-    if s.isna().all():
-        return ""
+    out = df.copy()
+    out[col] = pd.to_datetime(out[col], errors="coerce")
+    return out
 
-    return s.max().date()
 
 
 def safe_num(series):
