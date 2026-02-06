@@ -1173,13 +1173,14 @@ rules = [
      "flag": (pd.notna(caffeine_avg) and float(caffeine_avg) > 400)},
 ]
 flags_df = pd.DataFrame(rules)
+
 st.dataframe(
     flags_df.assign(avg_per_day=lambda d: d["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)),
     hide_index=True
 )
 
 if food_week.empty:
-st.caption("No food rows this week so far.")
+    st.caption("No food rows this week so far.")
 
     # ============================================================
     # Optional: latest available week micros from Weekly_Energy
