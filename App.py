@@ -1179,7 +1179,7 @@ st.dataframe(
 )
 
     
-    if food_week.empty:
+        if food_week.empty:
         st.caption("No food rows this week so far.")
 
     # ============================================================
