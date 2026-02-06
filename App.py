@@ -70,6 +70,18 @@ def _cached_get_all_records(_sheet_id: str, worksheet_name: str) -> list[dict]:
 
 import pandas as pd
 
+def filter_range(df: pd.DataFrame, start_date, end_date, col: str = "date") -> pd.DataFrame:
+    """
+    Filter df where df[col] is between start_date and end_date (inclusive).
+    start_date/end_date should be datetime.date objects.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty or col not in df.columns:
+        return pd.DataFrame()
+
+    s = pd.to_datetime(df[col], errors="coerce")
+    mask = (s.dt.date >= start_date) & (s.dt.date <= end_date)
+    return df.loc[mask].copy()
+
 def ensure_df(x) -> pd.DataFrame:
     """Guarantee a DataFrame so .empty and .columns never crash."""
     if isinstance(x, pd.DataFrame):
