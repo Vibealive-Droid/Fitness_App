@@ -1309,8 +1309,48 @@ TARGET_FIBRE_G = 25
 MAX_SODIUM_MG = 2500
 TARGET_POTASSIUM_MG = 3000
 
-# If you want, set a protein target based on your current goal (Matt: tweak here)
-PROTEIN_TARGET_G = 190  # change to your desired daily target
+# ============================================================
+# Rolling protein target from Daily_Energy (recommended)
+# ============================================================
+
+def rolling_target_from_daily(daily_df: pd.DataFrame, start_ts: pd.Timestamp, end_ts: pd.Timestamp,
+                              target_col: str = "protein_target_g") -> float | None:
+    if daily_df is None or daily_df.empty:
+        return None
+    if "date" not in daily_df.columns or target_col not in daily_df.columns:
+        return None
+
+    d = daily_df.copy()
+    d = normalise_date_col(d, "date")  # keep as datetime
+    d[target_col] = pd.to_numeric(d[target_col], errors="coerce")
+
+    # Filter by datetime bounds (not .dt.date)
+    mask = (d["date"].dt.normalize() >= start_ts.normalize()) & (d["date"].dt.normalize() <= end_ts.normalize())
+    sub = d.loc[mask, target_col].dropna()
+
+    if sub.empty:
+        return None
+
+    # Median is robust if targets jump a bit
+    return float(sub.median())
+
+# Example: THIS WEEK SO FAR target
+today = pd.Timestamp.today().normalize()
+week_start_ts = pd.Timestamp(monday_of(today))  # Monday
+week_end_ts = today
+
+daily_energy = load_sheet(WS_DAILY_ENERGY)
+daily_energy = normalise_date_col(daily_energy, "date")
+
+protein_target_week = rolling_target_from_daily(daily_energy, week_start_ts, week_end_ts, "protein_target_g")
+
+# Fallback if missing
+if protein_target_week is None:
+    protein_target_week = 190.0  # your fallback
+
+# Use this in your score logic:
+PROTEIN_TARGET_G = protein_target_week
+st.caption(f"Protein target used (this week): {PROTEIN_TARGET_G:.0f} g/day")
 
 # --- Subscores (0..1) ---
 # Protein: prefer adherence if you have it, else compare avg grams to target
