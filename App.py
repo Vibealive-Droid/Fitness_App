@@ -471,9 +471,9 @@ train = to_num(train, [
 # ============================================================
 # Filter weekly views (REAL DATAFRAMES)
 # ============================================================
-body_view   = filter_range(body,   start_date, end_date_for_weekly, "date")
+body_view   = filter_range(body, start_date, end_date_for_weekly, "date")
 energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
-train_view  = filter_range(train,  start_date, end_date_for_weekly, "date")
+train_view  = filter_range(train, start_date, end_date_for_weekly, "date")
 
 x_min = pd.Timestamp(start_date)
 x_max = pd.Timestamp(end_date_for_weekly)
