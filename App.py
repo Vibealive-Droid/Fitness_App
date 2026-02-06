@@ -68,6 +68,15 @@ def _cached_get_all_records(_sheet_id: str, worksheet_name: str) -> list[dict]:
     except Exception:
         return []
 
+import pandas as pd
+
+def ensure_df(x) -> pd.DataFrame:
+    """Guarantee a DataFrame so .empty and .columns never crash."""
+    if isinstance(x, pd.DataFrame):
+        return x
+    return pd.DataFrame()
+
+
 def load_sheet(worksheet_name: str) -> pd.DataFrame:
     """Safe loader: returns empty df if sheet missing/empty."""
     rows = _cached_get_all_records(SHEET_ID, worksheet_name)
@@ -448,11 +457,11 @@ train = to_num(train, [
 ])
 
 # ============================================================
-# Filter weekly views
+# Filter weekly views (REAL DATAFRAMES)
 # ============================================================
-body_view = (body, start_date, end_date_for_weekly, "date")
-energy_view = (energy, start_date, end_date_for_weekly, "date")
-train_view = (train, start_date, end_date_for_weekly, "date")
+body_view   = filter_range(body,   start_date, end_date_for_weekly, "date")
+energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
+train_view  = filter_range(train,  start_date, end_date_for_weekly, "date")
 
 x_min = pd.Timestamp(start_date)
 x_max = pd.Timestamp(end_date_for_weekly)
@@ -464,7 +473,7 @@ st.subheader("Weekly Body Comp (filtered)")
 body_table = date_for_table(body_view)
 
 if body_table.empty:
-    st.dataframe(body_table, hide_index=True)
+    st.info("No body rows in selected range.")
 else:
     st.dataframe(
         body_table.style.format({
@@ -476,6 +485,7 @@ else:
         }),
         hide_index=True
     )
+
 
 # ============================================================
 # Charts: Weight Trend
@@ -616,8 +626,11 @@ daily_energy = to_num(daily_energy, [
     "steps"
 ])
 
-daily_energy_week = (daily_energy, week_start, week_end, "date")
+daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
 daily_energy_week_logged = pick_logged_days(daily_energy_week)
+
+workout_week = filter_range(workout_log, week_start, week_end, "date")
+
 
 workout_log = load_sheet(WS_WORKOUT_LOG)
 workout_log = normalise_workout_log_schema(workout_log)
@@ -1092,8 +1105,7 @@ else:
         food["date"] = pd.to_datetime(food["date"], errors="coerce").dt.date
         
     food = food.copy()
-    food["date"] = pd.to_datetime(food["date"], errors="coerce")
-
+    food["date"] = pd.to_datetime(food["date"], errors="coerce").dt.normalize()
     food_week = filter_range(food, week_start, week_end, "date")
 
     # Pick columns if present (supports either staging names or raw export names)
