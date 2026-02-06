@@ -82,6 +82,27 @@ def filter_range(df: pd.DataFrame, start_date, end_date, col: str = "date") -> p
     mask = (s.dt.date >= start_date) & (s.dt.date <= end_date)
     return df.loc[mask].copy()
 
+def normalise_fibre_fiber_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Accepts both UK/US spellings and normalises to:
+      fiber_g, fibre_g (both present, same values)
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    # If only Fibre exists, create Fiber
+    if "fibre_g" in df.columns and "fiber_g" not in df.columns:
+        df["fiber_g"] = df["fibre_g"]
+
+    # If only Fiber exists, create Fibre
+    if "fiber_g" in df.columns and "fibre_g" not in df.columns:
+        df["fibre_g"] = df["fiber_g"]
+
+    return df
+
+
 def ensure_df(x) -> pd.DataFrame:
     """Guarantee a DataFrame so .empty and .columns never crash."""
     if isinstance(x, pd.DataFrame):
@@ -1045,6 +1066,7 @@ else:
         st.stop()
 
     food = normalise_date_col(food, "date")
+    food = normalise_fibre_fiber_cols(food)
 
     for c in ["calories", "protein", "carbs", "fat", "fiber_g", "sodium_mg", "potassium_mg", "caffeine_mg"]:
         if c in food.columns:
@@ -1075,7 +1097,8 @@ else:
     food_week = filter_range(food, week_start, week_end, "date")
 
     # Pick columns if present (supports either staging names or raw export names)
-    fiber_col = coalesce_col(food_week, ["fiber_g", "Fiber (g)", "Fiber", "Fibre (g)", "Fibre"])
+    fiber_col = coalesce_col(food_week, ["fiber_g", "fibre_g", "Fiber (g)", "Fibre (g)", "Fiber", "Fibre"])
+
     sodium_col = coalesce_col(food_week, ["sodium_mg", "Sodium (mg)", "Sodium"])
     potassium_col = coalesce_col(food_week, ["potassium_mg", "Potassium (mg)", "Potassium"])
     caffeine_col = coalesce_col(food_week, ["caffeine_mg", "Caffeine (mg)", "Caffeine"])
