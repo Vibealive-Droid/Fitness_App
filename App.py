@@ -1092,60 +1092,92 @@ else:
 
     food_week = filter_range(food, week_start, week_end, "date")  # this week so far
 
-    # ============================================================
-    # 🧂 Micronutrients + Quality flags (THIS WEEK SO FAR) — from Food Log
-    # ============================================================
-    st.subheader("🧂 Micronutrients + Quality flags (this week so far)")
+# ============================================================
+# 🧂 Micronutrients + Quality flags (THIS WEEK SO FAR)
+# ============================================================
+st.subheader("🧂 Micronutrients + Quality flags (this week so far)")
 
-   
+today = pd.Timestamp.today().normalize()
+week_start_ts = pd.Timestamp(monday_of(today))   # Timestamp (Mon)
+week_end_ts   = today                            # Timestamp (today)
 
-    fiber_col = coalesce_col(food_week, ["fiber_g", "fibre_g", "Fiber (g)", "Fibre (g)", "Fiber", "Fibre"])
-    sodium_col = coalesce_col(food_week, ["sodium_mg", "Sodium (mg)", "Sodium"])
-    potassium_col = coalesce_col(food_week, ["potassium_mg", "Potassium (mg)", "Potassium"])
-    caffeine_col = coalesce_col(food_week, ["caffeine_mg", "Caffeine (mg)", "Caffeine"])
+# Food-week (make sure it filters with datetime bounds)
+food_week = filter_range(food, week_start_ts, week_end_ts, "date")
 
-    def daily_avg_from_food(df: pd.DataFrame, colname: str | None):
-        """
-        Sum micronutrient by day, then average across days present.
-        """
-        if df.empty or colname is None or colname not in df.columns:
-            return pd.NA
-        daily = (
-            df.groupby("date", as_index=False)[colname]
-            .sum(numeric_only=True)
+fiber_col     = coalesce_col(food_week, ["fiber_g", "fibre_g", "Fiber (g)", "Fibre (g)", "Fiber", "Fibre"])
+sodium_col    = coalesce_col(food_week, ["sodium_mg", "Sodium (mg)", "Sodium"])
+potassium_col = coalesce_col(food_week, ["potassium_mg", "Potassium (mg)", "Potassium"])
+caffeine_col  = coalesce_col(food_week, ["caffeine_mg", "Caffeine (mg)", "Caffeine"])
+
+def daily_avg_from_food(df: pd.DataFrame, colname: str | None):
+    if df.empty or colname is None or colname not in df.columns:
+        return pd.NA
+    daily = df.groupby("date", as_index=False)[colname].sum(numeric_only=True)
+    return pd.to_numeric(daily[colname], errors="coerce").mean()
+
+# Try Food Log first
+fibre_avg     = daily_avg_from_food(food_week, fiber_col)
+sodium_avg    = daily_avg_from_food(food_week, sodium_col)
+potassium_avg = daily_avg_from_food(food_week, potassium_col)
+caffeine_avg  = daily_avg_from_food(food_week, caffeine_col)
+
+# FALLBACK: Weekly_Energy for THIS WEEK (row date == week_start)
+micro_cols = ["avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg"]
+need_fallback = all(pd.isna(x) for x in [fibre_avg, sodium_avg, potassium_avg, caffeine_avg])
+
+if need_fallback:
+    weekly_energy = load_sheet(WS_ENERGY_WEEKLY)
+    weekly_energy = normalise_date_col(weekly_energy, "date")
+
+    for c in micro_cols:
+        if c in weekly_energy.columns:
+            weekly_energy[c] = pd.to_numeric(weekly_energy[c], errors="coerce")
+
+    # Prefer "this week" row (Monday), else latest non-null micro row <= today
+    this_week = weekly_energy[weekly_energy["date"].dt.normalize() == week_start_ts]
+    if not this_week.empty:
+        row = this_week.sort_values("date").iloc[-1]
+    else:
+        pick = weekly_energy[weekly_energy["date"] <= today].dropna(
+            subset=[c for c in micro_cols if c in weekly_energy.columns],
+            how="all",
         )
-        return pd.to_numeric(daily[colname], errors="coerce").mean()
+        row = pick.sort_values("date").iloc[-1] if not pick.empty else None
 
-    fibre_avg = daily_avg_from_food(food_week, fiber_col)
-    sodium_avg = daily_avg_from_food(food_week, sodium_col)
-    potassium_avg = daily_avg_from_food(food_week, potassium_col)
-    caffeine_avg = daily_avg_from_food(food_week, caffeine_col)
+    if row is not None:
+        fibre_avg     = row.get("avg_fiber_g", pd.NA)
+        sodium_avg    = row.get("avg_sodium_mg", pd.NA)
+        potassium_avg = row.get("avg_potassium_mg", pd.NA)
+        caffeine_avg  = row.get("avg_caffeine_mg", pd.NA)
+        st.caption("Micros pulled from Weekly_Energy (Food Log micros missing for this week).")
 
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Fibre (avg/day)", metric_or_dash(fibre_avg, "{:.1f} g"))
-    with m2:
-        st.metric("Sodium (avg/day)", metric_or_dash(sodium_avg, "{:.0f} mg"))
-    with m3:
-        st.metric("Potassium (avg/day)", metric_or_dash(potassium_avg, "{:.0f} mg"))
-    with m4:
-        st.metric("Caffeine (avg/day)", metric_or_dash(caffeine_avg, "{:.0f} mg"))
+# Render metrics + flags using (possibly fallback) values
+m1, m2, m3, m4 = st.columns(4)
+with m1:
+    st.metric("Fibre (avg/day)", metric_or_dash(fibre_avg, "{:.1f} g"))
+with m2:
+    st.metric("Sodium (avg/day)", metric_or_dash(sodium_avg, "{:.0f} mg"))
+with m3:
+    st.metric("Potassium (avg/day)", metric_or_dash(potassium_avg, "{:.0f} mg"))
+with m4:
+    st.metric("Caffeine (avg/day)", metric_or_dash(caffeine_avg, "{:.0f} mg"))
 
-    rules = [
-        {"metric": "Fibre", "avg_per_day": fibre_avg, "rule": "Flag if < 25 g",
-         "flag": (pd.notna(fibre_avg) and float(fibre_avg) < 25)},
-        {"metric": "Sodium", "avg_per_day": sodium_avg, "rule": "Flag if > 2500 mg",
-         "flag": (pd.notna(sodium_avg) and float(sodium_avg) > 2500)},
-        {"metric": "Potassium", "avg_per_day": potassium_avg, "rule": "Flag if < 3000 mg",
-         "flag": (pd.notna(potassium_avg) and float(potassium_avg) < 3000)},
-        {"metric": "Caffeine", "avg_per_day": caffeine_avg, "rule": "Flag if > 400 mg",
-         "flag": (pd.notna(caffeine_avg) and float(caffeine_avg) > 400)},
-    ]
-    flags_df = pd.DataFrame(rules)
-    st.dataframe(
-        flags_df.assign(avg_per_day=lambda d: d["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)),
-        hide_index=True
-    )
+rules = [
+    {"metric": "Fibre", "avg_per_day": fibre_avg, "rule": "Flag if < 25 g",
+     "flag": (pd.notna(fibre_avg) and float(fibre_avg) < 25)},
+    {"metric": "Sodium", "avg_per_day": sodium_avg, "rule": "Flag if > 2500 mg",
+     "flag": (pd.notna(sodium_avg) and float(sodium_avg) > 2500)},
+    {"metric": "Potassium", "avg_per_day": potassium_avg, "rule": "Flag if < 3000 mg",
+     "flag": (pd.notna(potassium_avg) and float(potassium_avg) < 3000)},
+    {"metric": "Caffeine", "avg_per_day": caffeine_avg, "rule": "Flag if > 400 mg",
+     "flag": (pd.notna(caffeine_avg) and float(caffeine_avg) > 400)},
+]
+flags_df = pd.DataFrame(rules)
+st.dataframe(
+    flags_df.assign(avg_per_day=lambda d: d["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)),
+    hide_index=True
+)
+
     
     if food_week.empty:
         st.caption("No food rows this week so far.")
