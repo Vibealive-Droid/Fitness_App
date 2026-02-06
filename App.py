@@ -610,12 +610,6 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
 # ============================================================
-# Debug toggles
-# ============================================================
-with st.expander("🛠 Debug", expanded=False):
-    debug_on = st.checkbox("Show debug tables + computed metrics", value=False)
-
-# ============================================================
 # This week so far (ALWAYS current week: Monday -> today)
 # ============================================================
 st.subheader("This week so far")
