@@ -1159,8 +1159,7 @@ if need_fallback:
         sodium_avg    = row.get("avg_sodium_mg", pd.NA)
         potassium_avg = row.get("avg_potassium_mg", pd.NA)
         caffeine_avg  = row.get("avg_caffeine_mg", pd.NA)
-        st.caption("Micros pulled from Weekly_Energy (Food Log micros missing for this week).")
-
+        
 # Render metrics + flags using (possibly fallback) values
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -1223,9 +1222,6 @@ if food_week.empty:
             st.metric("Potassium (avg/day)", metric_or_dash(wp, "{:.0f} mg"))
         with w4:
             st.metric("Caffeine (avg/day)", metric_or_dash(wc, "{:.0f} mg"))
-
-# --- Debug (optional, remove later)
-st.caption(f"food rows: {len(food)} | food_view rows: {len(food_view)} | cols: {list(food_view.columns)}")
 
 # ============================================================
 # Patterns (selected range)
