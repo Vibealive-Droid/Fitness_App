@@ -1105,7 +1105,7 @@ else:
 # ============================================================
 # 🧂 Micronutrients + Quality flags (THIS WEEK SO FAR)
 # ============================================================
-st.subheader("🧂 Micronutrients + Quality flags (this week so far)")
+st.subheader("🧂 This week so far — Micronutrients + Quality")
 
 today = pd.Timestamp.today().normalize()
 week_start_ts = pd.Timestamp(monday_of(today))   # Timestamp (Mon)
@@ -1191,7 +1191,7 @@ st.dataframe(
 # ============================================================
 # 🍗 This week so far — Macro totals
 # ============================================================
-st.subheader("🍗 This week so far (macro totals)")
+st.subheader("🍗 This week so far — Macros")
 
 if food_week.empty:
     st.caption("No food rows this week so far.")
@@ -1260,7 +1260,7 @@ if food_week.empty:
 # ============================================================
 # Patterns (selected range)
 # ============================================================
-st.subheader("📈 Patterns (selected range)")
+st.subheader("📈 Patterns — Selected range")
 
 if food_view.empty:
     st.caption("No food rows in the selected date range.")
