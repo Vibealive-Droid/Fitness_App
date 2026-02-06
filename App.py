@@ -141,16 +141,26 @@ def to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
-    if df is None or df.empty or col not in df.columns:
-        return df.iloc[0:0]
+def filter_range(df: pd.DataFrame, start_date, end_date, date_col: str) -> pd.DataFrame:
+    if df is None or df.empty or date_col not in df.columns:
+        return df.iloc[0:0].copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
-    # Always coerce to datetime safely
-    s = pd.to_datetime(df[col], errors="coerce")
+    out = df.copy()
 
-    mask = (s.dt.date >= start_date) & (s.dt.date <= end_date)
-    return df.loc[mask].copy()
+    # parse date column to datetime (naive)
+    s = pd.to_datetime(out[date_col], errors="coerce").dt.tz_localize(None)
 
+    # convert bounds to plain dates (so we can compare to s.dt.date safely)
+    start_d = pd.to_datetime(start_date, errors="coerce").date() if start_date is not None else None
+    end_d   = pd.to_datetime(end_date, errors="coerce").date() if end_date is not None else None
+
+    if start_d is None or end_d is None:
+        return out.iloc[0:0].copy()
+
+    mask = (s.dt.date >= start_d) & (s.dt.date <= end_d)
+    out = out.loc[mask].copy()
+    out[date_col] = s.loc[mask].copy()
+    return out
 
 def date_for_table(df: pd.DataFrame, col="date") -> pd.DataFrame:
     # Return empty DF safely if input is bad
