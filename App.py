@@ -1178,9 +1178,8 @@ st.dataframe(
     hide_index=True
 )
 
-    
-        if food_week.empty:
-        st.caption("No food rows this week so far.")
+if food_week.empty:
+st.caption("No food rows this week so far.")
 
     # ============================================================
     # Optional: latest available week micros from Weekly_Energy
