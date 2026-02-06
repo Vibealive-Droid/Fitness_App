@@ -99,7 +99,7 @@ def to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
+def (df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
     if df.empty or col not in df.columns:
         return df
     mask = (df[col].dt.date >= start_date) & (df[col].dt.date <= end_date)
@@ -439,9 +439,9 @@ train = to_num(train, [
 # ============================================================
 # Filter weekly views
 # ============================================================
-body_view = filter_range(body, start_date, end_date_for_weekly, "date")
-energy_view = filter_range(energy, start_date, end_date_for_weekly, "date")
-train_view = filter_range(train, start_date, end_date_for_weekly, "date")
+body_view = (body, start_date, end_date_for_weekly, "date")
+energy_view = (energy, start_date, end_date_for_weekly, "date")
+train_view = (train, start_date, end_date_for_weekly, "date")
 
 x_min = pd.Timestamp(start_date)
 x_max = pd.Timestamp(end_date_for_weekly)
@@ -605,7 +605,7 @@ daily_energy = to_num(daily_energy, [
     "steps"
 ])
 
-daily_energy_week = filter_range(daily_energy, week_start, week_end, "date")
+daily_energy_week = (daily_energy, week_start, week_end, "date")
 daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
 workout_log = load_sheet(WS_WORKOUT_LOG)
@@ -613,7 +613,7 @@ workout_log = normalise_workout_log_schema(workout_log)
 workout_log = normalise_date_col(workout_log, "date")
 workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
 
-workout_week = filter_range(workout_log, week_start, week_end, "date")
+workout_week = (workout_log, week_start, week_end, "date")
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -701,7 +701,7 @@ if debug_on:
     last_week_end = (this_monday - pd.Timedelta(days=1)).date()
     st.caption(f"Debug (last week Mon–Sun): {last_week_start} → {last_week_end}")
 
-    de_last = filter_range(daily_energy, last_week_start, last_week_end, "date")
+    de_last = (daily_energy, last_week_start, last_week_end, "date")
     wl_last = filter_range(workout_log, last_week_start, last_week_end, "date")
 
     st.subheader("Daily_Energy (last week)")
@@ -1079,6 +1079,9 @@ else:
     # Ensure food["date"] is a real date (not string/datetime with tz)
     if "date" in food.columns:
         food["date"] = pd.to_datetime(food["date"], errors="coerce").dt.date
+        
+    food = food.copy()
+    food["date"] = pd.to_datetime(food["date"], errors="coerce")
 
     food_week = filter_range(food, week_start, week_end, "date")
 
