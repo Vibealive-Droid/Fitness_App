@@ -1224,111 +1224,121 @@ if food_week.empty:
         with w4:
             st.metric("Caffeine (avg/day)", metric_or_dash(wc, "{:.0f} mg"))
 
-    # ============================================================
-    # Patterns (selected range)
-    # ============================================================
-    if food_view.empty:
-        st.caption("No food rows in the selected date range.")
-    else:
-        st.subheader("Weekday vs weekend (avg daily totals)")
-        daily_food = (
-            food_view.groupby("date", as_index=False)[["calories", "protein", "carbs", "fat"]]
-            .sum(numeric_only=True)
-        )
-        daily_food["weekday"] = daily_food["date"].dt.weekday
-        daily_food["is_weekend"] = daily_food["weekday"].isin([5, 6])
+# --- Debug (optional, remove later)
+st.caption(f"food rows: {len(food)} | food_view rows: {len(food_view)} | cols: {list(food_view.columns)}")
 
-        weekend_cmp = (
-            daily_food.groupby("is_weekend")[["calories", "protein", "carbs", "fat"]]
-            .mean(numeric_only=True)
-            .reset_index()
-        )
-        weekend_cmp["day_type"] = weekend_cmp["is_weekend"].map({False: "Weekday", True: "Weekend"})
-        st.dataframe(weekend_cmp[["day_type", "calories", "protein", "carbs", "fat"]].round(1), hide_index=True)
+# ============================================================
+# Patterns (selected range)
+# ============================================================
+st.subheader("📈 Patterns (selected range)")
 
+if food_view.empty:
+    st.caption("No food rows in the selected date range.")
+else:
+    fv = food_view.copy()
+
+    # make sure date is datetime for .dt usage
+    fv["date"] = pd.to_datetime(fv["date"], errors="coerce").dt.tz_localize(None)
+
+    # ---- Weekday vs weekend
+    st.subheader("Weekday vs weekend (avg daily totals)")
+    daily_food = (
+        fv.groupby("date", as_index=False)[["calories", "protein", "carbs", "fat"]]
+        .sum(numeric_only=True)
+    )
+    daily_food["weekday"] = daily_food["date"].dt.weekday
+    daily_food["is_weekend"] = daily_food["weekday"].isin([5, 6])
+
+    weekend_cmp = (
+        daily_food.groupby("is_weekend")[["calories", "protein", "carbs", "fat"]]
+        .mean(numeric_only=True)
+        .reset_index()
+    )
+    weekend_cmp["day_type"] = weekend_cmp["is_weekend"].map({False: "Weekday", True: "Weekend"})
+    st.dataframe(weekend_cmp[["day_type", "calories", "protein", "carbs", "fat"]].round(1), hide_index=True)
+
+    # ---- Top foods (frequency)
+    if "food_name" in fv.columns:
         st.subheader("Top foods (by frequency)")
-        top_freq = food_view["food_name"].value_counts().head(15).reset_index()
+        top_freq = fv["food_name"].astype(str).str.strip().replace({"": pd.NA}).dropna().value_counts().head(15).reset_index()
         top_freq.columns = ["food_name", "count"]
         st.dataframe(top_freq, hide_index=True)
 
+        # ---- Top foods (totals)
         st.subheader("Top foods (by totals)")
         colX, colY = st.columns(2)
+
         with colX:
             st.caption("By total calories")
             top_cal = (
-                food_view.groupby("food_name", as_index=False)["calories"]
+                fv.groupby("food_name", as_index=False)["calories"]
                 .sum()
                 .sort_values("calories", ascending=False)
                 .head(15)
             )
             st.dataframe(top_cal, hide_index=True)
+
         with colY:
             st.caption("By total protein")
             top_pro = (
-                food_view.groupby("food_name", as_index=False)["protein"]
+                fv.groupby("food_name", as_index=False)["protein"]
                 .sum()
                 .sort_values("protein", ascending=False)
                 .head(15)
             )
             st.dataframe(top_pro, hide_index=True)
+    else:
+        st.caption("Missing food_name column; can't compute top foods.")
 
-        st.subheader("Most common foods by time of day")
-        if "time" in food_view.columns and food_view["time"].notna().any():
-            fv = food_view.copy()
-            t1 = pd.to_datetime(fv["time"], format="%I:%M %p", errors="coerce")
-            t2 = pd.to_datetime(fv["time"], format="%H:%M", errors="coerce")
-            t = t1.fillna(t2)
-            fv["hour"] = t.dt.hour
+    # ---- Most common foods by time of day
+    st.subheader("Most common foods by time of day")
+    if "time" in fv.columns and fv["time"].notna().any() and "food_name" in fv.columns:
+        t1 = pd.to_datetime(fv["time"], format="%I:%M %p", errors="coerce")
+        t2 = pd.to_datetime(fv["time"], format="%H:%M", errors="coerce")
+        t = t1.fillna(t2)
+        fv["hour"] = t.dt.hour
 
-            def bucket(h):
-                if pd.isna(h):
-                    return "Unknown"
-                h = int(h)
-                if 5 <= h < 11:
-                    return "Breakfast"
-                if 11 <= h < 15:
-                    return "Lunch"
-                if 15 <= h < 19:
-                    return "Dinner"
-                return "Evening"
+        def bucket(h):
+            if pd.isna(h):
+                return "Unknown"
+            h = int(h)
+            if 5 <= h < 11:  return "Breakfast"
+            if 11 <= h < 15: return "Lunch"
+            if 15 <= h < 19: return "Dinner"
+            return "Evening"
 
-            fv["meal_bucket"] = fv["hour"].apply(bucket)
+        fv["meal_bucket"] = fv["hour"].apply(bucket)
 
-            for bucket_name in ["Breakfast", "Lunch", "Dinner", "Evening"]:
-                sub = fv[fv["meal_bucket"] == bucket_name]
-                if sub.empty:
-                    continue
-                st.caption(bucket_name)
-                b = sub["food_name"].value_counts().head(10).reset_index()
-                b.columns = ["food_name", "count"]
-                st.dataframe(b, hide_index=True)
-        else:
-            st.caption("No time data available in the selected range.")
+        for bucket_name in ["Breakfast", "Lunch", "Dinner", "Evening"]:
+            sub = fv[fv["meal_bucket"] == bucket_name]
+            if sub.empty:
+                continue
+            st.caption(bucket_name)
+            b = sub["food_name"].astype(str).str.strip().replace({"": pd.NA}).dropna().value_counts().head(10).reset_index()
+            b.columns = ["food_name", "count"]
+            st.dataframe(b, hide_index=True)
+    else:
+        st.caption("No usable time data available in the selected range.")
 
-        st.subheader("Daily macros over time (grams)")
-        daily_macros = (
-            food_view.groupby("date", as_index=False)[["protein", "carbs", "fat"]]
-            .sum(numeric_only=True)
-            .dropna()
+    # ---- Daily macros chart
+    st.subheader("Daily macros over time (grams)")
+    daily_macros = (
+        fv.groupby("date", as_index=False)[["protein", "carbs", "fat"]]
+        .sum(numeric_only=True)
+        .dropna()
+    )
+    if not daily_macros.empty:
+        macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+        st.altair_chart(
+            alt.Chart(macro_m).mark_line(point=True).encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("grams:Q", title="grams"),
+                color=alt.Color("macro:N", title=""),
+                tooltip=["date:T", "macro:N", alt.Tooltip("grams:Q", format=".0f")],
+            ).properties(height=260),
+            use_container_width=True
         )
-        if not daily_macros.empty:
-            macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
-            macro_chart = (
-                alt.Chart(macro_m)
-                .mark_line(interpolate="monotone", point=True)
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("grams:Q", title="grams"),
-                    color=alt.Color("macro:N", title=""),
-                    tooltip=[
-                        alt.Tooltip("date:T"),
-                        alt.Tooltip("macro:N"),
-                        alt.Tooltip("grams:Q", format=".0f"),
-                    ],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(macro_chart, use_container_width=True)
+
 # ============================================================
 # Protein distribution by meal window (Food Log)
 # ============================================================
