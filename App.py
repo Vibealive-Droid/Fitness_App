@@ -1187,6 +1187,311 @@ st.dataframe(
     flags_df.assign(avg_per_day=lambda d: d["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)),
     hide_index=True
 )
+# ============================================================
+# ✅ Weekly Diet Score + Phase Suggestion (CUT / RECOMP / BULK)
+# (Drop this after your "this week so far" macros/micros block)
+# ============================================================
+
+import math
+
+# ---------- helpers ----------
+def clamp(x, lo=0.0, hi=1.0):
+    try:
+        return max(lo, min(hi, float(x)))
+    except Exception:
+        return lo
+
+def pct(x, digits=0):
+    return f"{x*100:.{digits}f}%"
+
+def safe_float(x):
+    try:
+        return float(x) if pd.notna(x) else None
+    except Exception:
+        return None
+
+def pick_latest_row(df: pd.DataFrame, date_col="date"):
+    if df is None or df.empty or date_col not in df.columns:
+        return None
+    tmp = df.copy()
+    tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce")
+    tmp = tmp.dropna(subset=[date_col]).sort_values(date_col)
+    return tmp.iloc[-1] if not tmp.empty else None
+
+# ---------- CSS: make the callout stand out ----------
+st.markdown(
+    """
+    <style>
+    .phase-card {
+        padding: 18px 18px 14px 18px;
+        border-radius: 18px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.04);
+        margin: 12px 0 8px 0;
+    }
+    .phase-title {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+    }
+    .phase-sub {
+        opacity: 0.9;
+        font-size: 14px;
+        margin-top: 4px;
+        line-height: 1.35;
+    }
+    .pill {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 12px;
+        margin-left: 8px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.06);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ============================================================
+# 1) Weekly Diet Score (THIS WEEK SO FAR)
+# ============================================================
+st.subheader("✅ Weekly Diet Score (this week so far)")
+
+# You already computed these earlier in your micros block:
+# fibre_avg, sodium_avg, potassium_avg, caffeine_avg
+# and you have food_week with calories/protein/carbs/fat per row.
+
+# Compute macro averages from food_week if present
+macro_avg = {"calories": None, "protein": None, "carbs": None, "fat": None}
+cal_std = None
+days_logged_food = 0
+
+if "food_week" in globals() and isinstance(food_week, pd.DataFrame) and not food_week.empty:
+    # daily totals then average + consistency
+    daily_totals = (
+        food_week.groupby("date", as_index=False)[["calories","protein","carbs","fat"]]
+        .sum(numeric_only=True)
+    )
+    days_logged_food = int(len(daily_totals))
+    if not daily_totals.empty:
+        macro_avg = daily_totals[["calories","protein","carbs","fat"]].mean(numeric_only=True).to_dict()
+        cal_std = safe_float(daily_totals["calories"].std(ddof=0))
+
+# Pull “this week so far” energy stats from your combined weekly tables if you have them
+# Prefer whatever you already computed for “This week so far” earlier.
+# If not, we’ll estimate from latest weekly row in energy_view.
+avg_balance = None
+protein_adherence = None
+energy_adherence = None
+
+if "avg_balance" in globals():
+    avg_balance = safe_float(globals().get("avg_balance"))
+if "protein_adherence" in globals():
+    protein_adherence = safe_float(globals().get("protein_adherence"))
+if "energy_adherence" in globals():
+    energy_adherence = safe_float(globals().get("energy_adherence"))
+
+# fallback from energy_view latest row
+if avg_balance is None or protein_adherence is None or energy_adherence is None:
+    rowE = pick_latest_row(energy_view) if ("energy_view" in globals() and isinstance(energy_view, pd.DataFrame)) else None
+    if rowE is not None:
+        # adjust these names if yours differ
+        avg_balance = avg_balance if avg_balance is not None else safe_float(rowE.get("avg_calorie_delta", None))
+        protein_adherence = protein_adherence if protein_adherence is not None else safe_float(rowE.get("protein_adherence_avg", None))
+        energy_adherence = energy_adherence if energy_adherence is not None else safe_float(rowE.get("energy_adherence_avg", None))
+
+# --- Targets (tune these) ---
+TARGET_FIBRE_G = 25
+MAX_SODIUM_MG = 2500
+TARGET_POTASSIUM_MG = 3000
+
+# If you want, set a protein target based on your current goal (Matt: tweak here)
+PROTEIN_TARGET_G = 190  # change to your desired daily target
+
+# --- Subscores (0..1) ---
+# Protein: prefer adherence if you have it, else compare avg grams to target
+if protein_adherence is not None:
+    s_protein = clamp(protein_adherence / 0.90)  # 90%+ is "full credit"
+else:
+    p = safe_float(macro_avg.get("protein"))
+    s_protein = clamp((p or 0) / PROTEIN_TARGET_G)
+
+# Fibre: use fibre_avg if available
+f = safe_float(fibre_avg) if "fibre_avg" in globals() else None
+s_fibre = clamp((f or 0) / TARGET_FIBRE_G)
+
+# Sodium: lower is better; full credit at <= MAX_SODIUM, fades out by +1200mg
+s = safe_float(sodium_avg) if "sodium_avg" in globals() else None
+if s is None:
+    s_sodium = 0.5
+else:
+    s_sodium = clamp(1 - max(0, (s - MAX_SODIUM_MG)) / 1200)
+
+# Potassium: higher is better; full credit at >= target
+k = safe_float(potassium_avg) if "potassium_avg" in globals() else None
+s_potassium = clamp((k or 0) / TARGET_POTASSIUM_MG)
+
+# Consistency: use energy adherence if you have it; else use calories std-dev heuristic
+if energy_adherence is not None:
+    s_consistency = clamp(energy_adherence / 0.90)
+else:
+    # cal_std: 0 = perfect; 500+ is rough
+    if cal_std is None:
+        s_consistency = 0.6
+    else:
+        s_consistency = clamp(1 - (cal_std / 500))
+
+# --- Weighted score ---
+weights = {
+    "protein": 0.30,
+    "fibre": 0.20,
+    "sodium": 0.15,
+    "potassium": 0.15,
+    "consistency": 0.20,
+}
+score_0_100 = round(100 * (
+    weights["protein"] * s_protein +
+    weights["fibre"] * s_fibre +
+    weights["sodium"] * s_sodium +
+    weights["potassium"] * s_potassium +
+    weights["consistency"] * s_consistency
+))
+
+# --- Grade / colour hint ---
+if score_0_100 >= 85:
+    grade = "GREEN"
+    grade_emoji = "🟩"
+elif score_0_100 >= 70:
+    grade = "YELLOW"
+    grade_emoji = "🟨"
+else:
+    grade = "RED"
+    grade_emoji = "🟥"
+
+cA, cB = st.columns([1, 2])
+with cA:
+    st.metric("Diet Score", f"{score_0_100}/100", f"{grade_emoji} {grade}")
+    st.progress(score_0_100 / 100)
+with cB:
+    fixes = []
+    if s_protein < 0.95: fixes.append("Protein is low vs target / adherence")
+    if s_fibre < 0.95: fixes.append("Fibre is low")
+    if s_sodium < 0.85: fixes.append("Sodium is high")
+    if s_potassium < 0.90: fixes.append("Potassium is low")
+    if s_consistency < 0.85: fixes.append("Intake consistency is drifting")
+
+    if not fixes:
+        st.success("Looks tight this week — nothing obvious to fix.")
+    else:
+        st.warning("Quick fixes to bump the score:\n- " + "\n- ".join(fixes))
+
+st.caption(
+    f"Inputs — Protein: {round(s_protein*100)}% | Fibre: {round(s_fibre*100)}% | "
+    f"Sodium: {round(s_sodium*100)}% | Potassium: {round(s_potassium*100)}% | "
+    f"Consistency: {round(s_consistency*100)}%"
+)
+
+# ============================================================
+# 2) Phase Suggestion (CUT / RECOMP / BULK) — BIG callout
+# ============================================================
+st.subheader("🎯 Phase suggestion (this week so far)")
+
+# Pull bodyweight from body_view (latest within selected range) if available
+bw = None
+if "body_view" in globals() and isinstance(body_view, pd.DataFrame) and not body_view.empty:
+    rB = pick_latest_row(body_view)
+    if rB is not None:
+        # adjust if your column is different
+        bw = safe_float(rB.get("weight", None)) or safe_float(rB.get("avg_scale_weight_lb", None))
+
+# Pull weekly weight change from your weekly table if you have it (else None)
+weekly_wt_change = None
+if "energy_view" in globals() and isinstance(energy_view, pd.DataFrame) and not energy_view.empty:
+    rE = pick_latest_row(energy_view)
+    if rE is not None:
+        weekly_wt_change = safe_float(rE.get("weight_change", None))  # lbs/week if you have it
+
+# Decide phase from energy balance + weight change if available
+phase = "RECOMP"
+phase_emoji = "🟦"
+pill = "Balanced / maintain"
+confidence = "Medium"
+reason = []
+
+bal = avg_balance  # kcal/day avg (negative means deficit)
+wc = weekly_wt_change  # lbs/week (if present)
+bw_val = bw
+
+# thresholds (tweak)
+CUT_DEFICIT = -250
+BULK_SURPLUS = 250
+
+# weight-change thresholds as %BW / week if BW known
+cut_rate = None
+bulk_rate = None
+if bw_val and wc is not None:
+    pct_bw = (wc / bw_val) * 100
+    cut_rate = pct_bw
+    bulk_rate = pct_bw
+
+if bal is not None:
+    reason.append(f"Avg energy balance: {bal:.0f} kcal/day")
+
+if wc is not None:
+    reason.append(f"Weekly weight change: {wc:+.2f} lb/week" + (f" ({cut_rate:+.2f}% BW/wk)" if bw_val else ""))
+
+# Phase logic
+if bal is not None and bal <= CUT_DEFICIT:
+    phase = "CUT"
+    phase_emoji = "🟥"
+    pill = "Deficit is meaningful"
+    confidence = "High" if (wc is not None) else "Medium"
+elif bal is not None and bal >= BULK_SURPLUS:
+    phase = "BULK"
+    phase_emoji = "🟩"
+    pill = "Surplus is meaningful"
+    confidence = "High" if (wc is not None) else "Medium"
+else:
+    phase = "RECOMP"
+    phase_emoji = "🟦"
+    pill = "Near maintenance"
+    confidence = "High" if (bal is not None) else "Medium"
+
+# If you DO have weight-change, refine confidence
+if bw_val and wc is not None and bal is not None:
+    # if signals agree, confidence up; if disagree, confidence down
+    agree_cut = (bal <= CUT_DEFICIT and wc < 0)
+    agree_bulk = (bal >= BULK_SURPLUS and wc > 0)
+    agree_recomp = (CUT_DEFICIT < bal < BULK_SURPLUS and abs(wc) < 0.4)
+    if agree_cut or agree_bulk or agree_recomp:
+        confidence = "High"
+    else:
+        confidence = "Low"
+
+# Render big callout
+st.markdown(
+    f"""
+    <div class="phase-card">
+      <div class="phase-title">{phase_emoji} {phase} <span class="pill">{pill} · Confidence: {confidence}</span></div>
+      <div class="phase-sub">
+        {"<br>".join(reason) if reason else "Not enough data to compute a confident phase. (Need avg balance and/or weekly weight change.)"}
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# Optional: give a concrete “what to do next” line
+if phase == "CUT":
+    st.info("Cut focus: keep protein high, tighten consistency, and aim for ~0.5% BW/week loss (adjust calories if trend stalls).")
+elif phase == "BULK":
+    st.info("Bulk focus: aim for ~0.25–0.5% BW/week gain, keep fibre + sodium sane, and push training progression.")
+else:
+    st.info("Recomp focus: hold intake steady, keep protein + training consistent, and let trend do its thing for a few weeks.")
 
 # ============================================================
 # 🍗 This week so far — Macro totals
