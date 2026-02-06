@@ -99,11 +99,16 @@ def to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-def (df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
-    if df.empty or col not in df.columns:
-        return df
-    mask = (df[col].dt.date >= start_date) & (df[col].dt.date <= end_date)
+def filter_range(df: pd.DataFrame, start_date, end_date, col="date") -> pd.DataFrame:
+    if df is None or df.empty or col not in df.columns:
+        return df.iloc[0:0]
+
+    # Always coerce to datetime safely
+    s = pd.to_datetime(df[col], errors="coerce")
+
+    mask = (s.dt.date >= start_date) & (s.dt.date <= end_date)
     return df.loc[mask].copy()
+
 
 def date_for_table(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     """For table display only (clean YYYY-MM-DD)."""
