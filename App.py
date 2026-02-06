@@ -1076,6 +1076,10 @@ else:
     week_start = week_start_dt.date()
     week_end = today.date()
 
+    # Ensure food["date"] is a real date (not string/datetime with tz)
+    if "date" in food.columns:
+        food["date"] = pd.to_datetime(food["date"], errors="coerce").dt.date
+
     food_week = filter_range(food, week_start, week_end, "date")
 
     # Pick columns if present (supports either staging names or raw export names)
@@ -1123,8 +1127,8 @@ else:
         hide_index=True
     )
 
-    if food_view.empty:
-        st.caption("No food rows in the selected date range.")
+    if food_week.empty:
+        st.caption("No food rows this week so far.")
     else:
         st.subheader("Weekday vs weekend (avg daily totals)")
         daily_food = (
