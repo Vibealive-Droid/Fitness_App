@@ -1188,6 +1188,40 @@ st.dataframe(
     hide_index=True
 )
 
+# ============================================================
+# 🍗 This week so far — Macro totals
+# ============================================================
+st.subheader("🍗 This week so far (macro totals)")
+
+if food_week.empty:
+    st.caption("No food rows this week so far.")
+else:
+    weekly_totals = (
+        food_week.groupby("date", as_index=False)[["calories","protein","carbs","fat"]]
+        .sum(numeric_only=True)
+    )
+
+    avg_day = weekly_totals[["calories","protein","carbs","fat"]].mean(numeric_only=True)
+    total_week = weekly_totals[["calories","protein","carbs","fat"]].sum(numeric_only=True)
+
+    c1,c2,c3,c4 = st.columns(4)
+    with c1:
+        st.metric("Calories avg/day", f"{avg_day['calories']:.0f}")
+    with c2:
+        st.metric("Protein avg/day", f"{avg_day['protein']:.0f} g")
+    with c3:
+        st.metric("Carbs avg/day", f"{avg_day['carbs']:.0f} g")
+    with c4:
+        st.metric("Fat avg/day", f"{avg_day['fat']:.0f} g")
+
+    st.caption(
+        f"Week totals — Calories: {total_week['calories']:.0f} | "
+        f"Protein: {total_week['protein']:.0f}g | "
+        f"Carbs: {total_week['carbs']:.0f}g | "
+        f"Fat: {total_week['fat']:.0f}g"
+    )
+
+
 if food_week.empty:
     st.caption("No food rows this week so far.")
 
