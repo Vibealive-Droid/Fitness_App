@@ -473,8 +473,11 @@ energy = to_num(energy, [
     "avg_calories", "avg_expenditure", "avg_calorie_target", "avg_calorie_delta",
     "avg_protein_g", "avg_carbs_g", "avg_fat_g",
     "protein_adherence_avg", "energy_adherence_avg",
-    "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps"
+    "avg_scale_weight_lb", "avg_trend_weight_lb", "avg_steps",
+    # ✅ add these
+    "avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg",
 ])
+
 
 # ============================================================
 # Load weekly TRAINING
@@ -1081,6 +1084,53 @@ else:
     # Pull from food log (because Daily_Energy doesn't have micros)
     # ============================================================
     st.header("🧂 Micronutrients + Quality flags")
+
+# Use latest available week in Weekly_Energy (within your selected range if possible)
+micros_week = energy_view.copy()
+
+# Prefer the most recent row that actually has any micro data
+micro_cols = ["avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg"]
+for c in micro_cols:
+    if c in micros_week.columns:
+        micros_week[c] = pd.to_numeric(micros_week[c], errors="coerce")
+
+if micros_week.empty or not any(c in micros_week.columns for c in micro_cols):
+    st.caption("No Weekly_Energy micronutrient columns found in the selected range.")
+else:
+    # pick latest row with at least one micro value
+    pick = micros_week.dropna(subset=[c for c in micro_cols if c in micros_week.columns], how="all")
+    row = (pick.sort_values("date").tail(1) if not pick.empty else micros_week.sort_values("date").tail(1)).iloc[0]
+
+    fibre_avg = row.get("avg_fiber_g", pd.NA)
+    sodium_avg = row.get("avg_sodium_mg", pd.NA)
+    potassium_avg = row.get("avg_potassium_mg", pd.NA)
+    caffeine_avg = row.get("avg_caffeine_mg", pd.NA)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Fibre (avg/day)", metric_or_dash(fibre_avg, "{:.1f} g"))
+    with m2:
+        st.metric("Sodium (avg/day)", metric_or_dash(sodium_avg, "{:.0f} mg"))
+    with m3:
+        st.metric("Potassium (avg/day)", metric_or_dash(potassium_avg, "{:.0f} mg"))
+    with m4:
+        st.metric("Caffeine (avg/day)", metric_or_dash(caffeine_avg, "{:.0f} mg"))
+
+    rules = [
+        {"metric": "Fibre", "avg_per_day": fibre_avg, "rule": "Flag if < 25 g",
+         "flag": (pd.notna(fibre_avg) and float(fibre_avg) < 25)},
+        {"metric": "Sodium", "avg_per_day": sodium_avg, "rule": "Flag if > 2500 mg",
+         "flag": (pd.notna(sodium_avg) and float(sodium_avg) > 2500)},
+        {"metric": "Potassium", "avg_per_day": potassium_avg, "rule": "Flag if < 3000 mg",
+         "flag": (pd.notna(potassium_avg) and float(potassium_avg) < 3000)},
+        {"metric": "Caffeine", "avg_per_day": caffeine_avg, "rule": "Flag if > 400 mg",
+         "flag": (pd.notna(caffeine_avg) and float(caffeine_avg) > 400)},
+    ]
+    st.subheader("Quality flags (latest available week)")
+    st.dataframe(pd.DataFrame(rules).assign(
+        avg_per_day=lambda d: d["avg_per_day"].apply(lambda x: "—" if pd.isna(x) else x)
+    ), hide_index=True)
+
 
     # Reuse your "this week so far" window
     today = pd.Timestamp.today().normalize()
