@@ -1097,35 +1097,7 @@ else:
     # ============================================================
     st.subheader("🧂 Micronutrients + Quality flags (this week so far)")
 
-    # --- Fallback: if Food Log has no micros (all NA), use Weekly_Energy micros instead
-    if pd.isna(fibre_avg) and pd.isna(sodium_avg) and pd.isna(potassium_avg) and pd.isna(caffeine_avg):
-        micro_cols = ["avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg"]
-
-        if ("energy_view" in globals()) and (not energy_view.empty) and any(c in energy_view.columns for c in micro_cols):
-            ev = energy_view.copy()
-            ev = normalise_date_col(ev, "date")  # make sure datetime
-            for c in micro_cols:
-                if c in ev.columns:
-                    ev[c] = pd.to_numeric(ev[c], errors="coerce")
-
-            # Weekly_Energy rows are weekly, so "this week so far" = the row whose date == Monday of this week (if present),
-            # otherwise latest row in range that has any micro data.
-            this_week_row = ev[ev["date"].dt.date == week_start]
-            pick = this_week_row if not this_week_row.empty else ev
-            pick = pick.dropna(subset=[c for c in micro_cols if c in pick.columns], how="all")
-
-            if not pick.empty:
-                row = pick.sort_values("date").tail(1).iloc[0]
-                fibre_avg = row.get("avg_fiber_g", pd.NA)
-                sodium_avg = row.get("avg_sodium_mg", pd.NA)
-                potassium_avg = row.get("avg_potassium_mg", pd.NA)
-                caffeine_avg = row.get("avg_caffeine_mg", pd.NA)
-
-                st.caption("Micros pulled from Weekly_Energy (Food Log has no micro columns).")
-            else:
-                st.caption("Weekly_Energy has micro columns, but no non-null micro values in the current range.")
-        else:
-            st.caption("No micro columns found in Food Log or Weekly_Energy.")
+   
 
     fiber_col = coalesce_col(food_week, ["fiber_g", "fibre_g", "Fiber (g)", "Fibre (g)", "Fiber", "Fibre"])
     sodium_col = coalesce_col(food_week, ["sodium_mg", "Sodium (mg)", "Sodium"])
