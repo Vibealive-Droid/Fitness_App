@@ -70,6 +70,69 @@ def _cached_get_all_records(_sheet_id: str, worksheet_name: str) -> list[dict]:
 
 import pandas as pd
 
+import math
+
+def clamp(x, lo=0.0, hi=1.0):
+    try:
+        x = float(x)
+    except Exception:
+        return lo
+    return max(lo, min(hi, x))
+
+def week_progress_context(today_ts: pd.Timestamp):
+    """Returns Monday-start week context using Timestamps."""
+    today_ts = pd.Timestamp(today_ts).normalize()
+    week_start_ts = pd.Timestamp(monday_of(today_ts)).normalize()
+    days_elapsed = int((today_ts - week_start_ts).days) + 1  # 1..7
+    days_elapsed = max(1, min(7, days_elapsed))
+    week_complete = (days_elapsed >= 7)
+    return week_start_ts, today_ts, days_elapsed, week_complete
+
+def score_band_label(score: float, week_complete: bool):
+    """
+    In-progress week should be neutral/amber unless it's extremely high.
+    Completed week gets real judgement colours.
+    """
+    s = float(score) if score is not None and not pd.isna(score) else 0.0
+
+    if not week_complete:
+        # progress mode: don't shame early-week data
+        if s >= 85:
+            return "🟢 STRONG (in progress)"
+        return "🟡 IN PROGRESS"
+
+    # final mode
+    if s >= 80:
+        return "🟢 STRONG"
+    if s >= 65:
+        return "🟡 OK"
+    return "🔴 NEEDS WORK"
+
+def confidence_from_days_logged(days_logged: int, days_elapsed: int):
+    """
+    Confidence rises with data completeness.
+    - based on % of elapsed days that have logs
+    - slightly penalize if days_elapsed is tiny (Mon/Tue)
+    """
+    dl = 0 if days_logged is None else int(days_logged)
+    de = max(1, int(days_elapsed))
+    pct = clamp(dl / de, 0, 1)
+
+    # soften Monday/Tue overreactions
+    early_penalty = 0.15 if de <= 2 else 0.0
+    conf = clamp(pct - early_penalty, 0, 1)
+
+    if conf >= 0.85:
+        return "High", conf
+    if conf >= 0.55:
+        return "Medium", conf
+    return "Low", conf
+
+def render_confidence_bar(conf: float):
+    # simple progress bar; Streamlit takes 0..1 or 0..100
+    st.progress(int(round(conf * 100)))
+
+
 def filter_range(df: pd.DataFrame, start_date, end_date, col: str = "date") -> pd.DataFrame:
     """
     Filter df where df[col] is between start_date and end_date (inclusive).
@@ -1257,57 +1320,61 @@ st.markdown(
 )
 
 # ============================================================
-# 1) Weekly Diet Score (THIS WEEK SO FAR)
+# ✅ Weekly Diet Score (this week so far) — PROGRESS-AWARE
 # ============================================================
 st.subheader("✅ Weekly Diet Score (this week so far)")
 
-# You already computed these earlier in your micros block:
-# fibre_avg, sodium_avg, potassium_avg, caffeine_avg
-# and you have food_week with calories/protein/carbs/fat per row.
+today_ts = pd.Timestamp.today().normalize()
+week_start_ts, week_end_ts, days_elapsed, week_complete = week_progress_context(today_ts)
 
-# Compute macro averages from food_week if present
-macro_avg = {"calories": None, "protein": None, "carbs": None, "fat": None}
-cal_std = None
-days_logged_food = 0
+# If you have days_logged already, great. If not, try infer it from daily_energy within the week:
+# (safe fallback)
+if "days_logged" not in locals():
+    try:
+        de = daily_energy.copy() if "daily_energy" in locals() else load_sheet(WS_DAILY_ENERGY)
+        de = normalise_date_col(de, "date")
+        de_week = filter_range(de, week_start_ts.date(), week_end_ts.date(), "date")
+        # Use your days_logged_flag if present, else count rows with calories
+        if "days_logged_flag" in de_week.columns:
+            days_logged = int(pd.to_numeric(de_week["days_logged_flag"], errors="coerce").fillna(0).sum())
+        else:
+            days_logged = int(de_week["date"].nunique())
+    except Exception:
+        days_logged = 0
 
-if "food_week" in globals() and isinstance(food_week, pd.DataFrame) and not food_week.empty:
-    # daily totals then average + consistency
-    daily_totals = (
-        food_week.groupby("date", as_index=False)[["calories","protein","carbs","fat"]]
-        .sum(numeric_only=True)
+# Score label + confidence
+label = score_band_label(diet_score, week_complete)
+conf_label, conf = confidence_from_days_logged(days_logged, days_elapsed)
+
+# Layout
+left, right = st.columns([1, 2])
+
+with left:
+    st.caption(f"Days elapsed: {days_elapsed}/7 • Days logged: {days_logged}")
+    st.metric("Diet Score", f"{int(round(float(diet_score))):d}/100", label)
+
+    # Confidence bar (based on data completeness)
+    st.caption(f"Confidence: {conf_label}")
+    render_confidence_bar(conf)
+
+    # Helpful note
+    if not week_complete:
+        st.caption("Provisional score — this week is still in progress.")
+
+with right:
+    # quick fixes box (your list can be built from your scoring inputs)
+    st.info(
+        "Quick fixes to bump the score:\n"
+        "- Protein is low vs target / adherence\n"
+        "- Fibre is low\n"
+        "- Potassium is low\n"
+        "- Intake consistency is drifting"
     )
-    days_logged_food = int(len(daily_totals))
-    if not daily_totals.empty:
-        macro_avg = daily_totals[["calories","protein","carbs","fat"]].mean(numeric_only=True).to_dict()
-        cal_std = safe_float(daily_totals["calories"].std(ddof=0))
 
-# Pull “this week so far” energy stats from your combined weekly tables if you have them
-# Prefer whatever you already computed for “This week so far” earlier.
-# If not, we’ll estimate from latest weekly row in energy_view.
-avg_balance = None
-protein_adherence = None
-energy_adherence = None
+# Optional: show your inputs breakdown text if you already generate it
+if "inputs_breakdown_text" in locals() and inputs_breakdown_text:
+    st.caption(inputs_breakdown_text)
 
-if "avg_balance" in globals():
-    avg_balance = safe_float(globals().get("avg_balance"))
-if "protein_adherence" in globals():
-    protein_adherence = safe_float(globals().get("protein_adherence"))
-if "energy_adherence" in globals():
-    energy_adherence = safe_float(globals().get("energy_adherence"))
-
-# fallback from energy_view latest row
-if avg_balance is None or protein_adherence is None or energy_adherence is None:
-    rowE = pick_latest_row(energy_view) if ("energy_view" in globals() and isinstance(energy_view, pd.DataFrame)) else None
-    if rowE is not None:
-        # adjust these names if yours differ
-        avg_balance = avg_balance if avg_balance is not None else safe_float(rowE.get("avg_calorie_delta", None))
-        protein_adherence = protein_adherence if protein_adherence is not None else safe_float(rowE.get("protein_adherence_avg", None))
-        energy_adherence = energy_adherence if energy_adherence is not None else safe_float(rowE.get("energy_adherence_avg", None))
-
-# --- Targets (tune these) ---
-TARGET_FIBRE_G = 25
-MAX_SODIUM_MG = 2500
-TARGET_POTASSIUM_MG = 3000
 
 # ============================================================
 # Rolling protein target from Daily_Energy (recommended)
