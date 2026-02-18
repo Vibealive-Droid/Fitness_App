@@ -607,6 +607,107 @@ if not train_view.empty:
 
 combined = combined.sort_values("date").reset_index(drop=True)
 
+# ============================================================
+# Suggested phase: Cut vs Recomp vs Lean bulk (selected range)
+# ============================================================
+st.subheader("🎯 Suggested phase (Cut / Recomp / Lean bulk)")
+
+def _last_non_na(s: pd.Series):
+    s2 = pd.to_numeric(s, errors="coerce").dropna()
+    return s2.iloc[-1] if not s2.empty else pd.NA
+
+def _safe_mean(s: pd.Series):
+    s2 = pd.to_numeric(s, errors="coerce").dropna()
+    return s2.mean() if not s2.empty else pd.NA
+
+# Use energy balance if available; else approximate from weight trend
+avg_bal = pd.NA
+if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
+    avg_bal = _safe_mean(pd.to_numeric(combined["avg_calories"], errors="coerce") - pd.to_numeric(combined["avg_expenditure"], errors="coerce"))
+
+w0 = _last_non_na(combined.get("weight", pd.Series(dtype=float)))
+bf0 = _last_non_na(combined.get("body_fat", pd.Series(dtype=float)))
+lean0 = _last_non_na(combined.get("lean_mass", pd.Series(dtype=float)))
+fat0 = _last_non_na(combined.get("fat_mass", pd.Series(dtype=float)))
+
+# Weight change over the selected range (per week)
+w_rate = pd.NA
+if "weight" in combined.columns and combined["weight"].notna().sum() >= 2:
+    tmp = combined[["date", "weight"]].dropna().copy()
+    if len(tmp) >= 2:
+        days = (tmp["date"].iloc[-1] - tmp["date"].iloc[0]).days
+        if days > 0:
+            w_rate = (tmp["weight"].iloc[-1] - tmp["weight"].iloc[0]) / (days / 7.0)
+
+# Basic heuristic rules
+# - If BF high-ish and surplus is positive -> suggest cut or recomp
+# - If BF moderate and near maintenance -> recomp
+# - If BF lower and surplus modest -> lean bulk
+phase = "Recomp"
+reason = []
+
+if pd.notna(bf0):
+    if bf0 >= 18:
+        phase = "Cut"
+        reason.append("Body fat is on the higher side (≥18%).")
+    elif bf0 <= 13:
+        phase = "Lean bulk"
+        reason.append("Body fat is relatively low (≤13%).")
+    else:
+        phase = "Recomp"
+        reason.append("Body fat is in a mid range (≈13–18%).")
+
+if pd.notna(avg_bal):
+    if avg_bal <= -150:
+        phase = "Cut"
+        reason.append(f"Average energy balance looks like a deficit ({avg_bal:.0f} kcal/day).")
+    elif avg_bal >= 150:
+        # if already high BF, stay cut; otherwise lean bulk
+        if phase != "Cut":
+            phase = "Lean bulk"
+        reason.append(f"Average energy balance looks like a surplus ({avg_bal:.0f} kcal/day).")
+    else:
+        reason.append("Energy balance looks close to maintenance (±150 kcal/day).")
+elif pd.notna(w_rate):
+    if w_rate <= -0.25:
+        phase = "Cut"
+        reason.append(f"Weight trend is decreasing (~{w_rate:.2f} lb/week).")
+    elif w_rate >= 0.25:
+        if phase != "Cut":
+            phase = "Lean bulk"
+        reason.append(f"Weight trend is increasing (~{w_rate:.2f} lb/week).")
+    else:
+        reason.append("Weight trend is roughly stable.")
+
+# Present result
+st.markdown(f"**Suggested focus:** `{phase}`")
+
+cols = st.columns(4)
+with cols[0]:
+    st.metric("Latest weight", metric_or_dash(w0, "{:.1f} lb"))
+with cols[1]:
+    st.metric("Latest body fat", metric_or_dash(bf0, "{:.1f}%"))
+with cols[2]:
+    st.metric("Lean mass", metric_or_dash(lean0, "{:.1f} lb"))
+with cols[3]:
+    st.metric("Fat mass", metric_or_dash(fat0, "{:.1f} lb"))
+
+if pd.notna(avg_bal):
+    st.caption(f"Avg energy balance in range: {avg_bal:.0f} kcal/day")
+elif pd.notna(w_rate):
+    st.caption(f"Estimated weight change rate: {w_rate:.2f} lb/week")
+
+if reason:
+    st.caption("Why: " + " ".join(reason))
+
+# Optional: simple targets
+if phase == "Cut":
+    st.info("Cut target: ~0.5–1.0 lb/week loss (small deficit, keep protein high, keep training performance stable).")
+elif phase == "Lean bulk":
+    st.info("Lean bulk target: ~0.25–0.5 lb/week gain (small surplus, watch waist/scale trend).")
+else:
+    st.info("Recomp target: hold weight steady (±0.25 lb/week) while pushing training quality and adherence.")
+
 if "weight" in combined.columns:
     combined["weight_change"] = safe_num(combined["weight"]).diff()
 if "lean_mass" in combined.columns:
