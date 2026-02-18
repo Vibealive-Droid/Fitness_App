@@ -987,7 +987,12 @@ def _within_pct(actual, target, tol):
         return pd.NA
     return abs(float(actual) - float(target)) <= abs(float(target)) * tol
 
-food_daily = _daily_totals_from_food(food_win)
+# --- FoodLog-based compliance (optional) ---
+if "food_win" in globals() and isinstance(food_win, pd.DataFrame) and not food_win.empty:
+    food_daily = _daily_totals_from_food(food_win)
+else:
+    food_daily = pd.DataFrame()
+
 targets_daily = _targets_from_daily_energy(daily_energy_win_logged)
 daily_cmp = pd.merge(food_daily, targets_daily, on="date", how="outer")
 
