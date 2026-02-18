@@ -70,10 +70,60 @@ def ensure_df(x) -> pd.DataFrame:
         return x
     return pd.DataFrame()
 
+def _make_unique(cols):
+    seen = {}
+    out = []
+    for c in cols:
+        c = (c or "").strip()
+        if not c:
+            out.append("")  # keep placeholder; we'll drop blanks later
+            continue
+        if c not in seen:
+            seen[c] = 0
+            out.append(c)
+        else:
+            seen[c] += 1
+            out.append(f"{c}_{seen[c]}")
+    return out
+
 def load_sheet(worksheet_name: str) -> pd.DataFrame:
-    """Safe loader: returns empty df if sheet missing/empty."""
-    rows = _cached_get_all_records(SHEET_ID, worksheet_name)
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    """Safe loader that survives duplicate/blank headers in Google Sheets."""
+    try:
+        ws = sh.worksheet(worksheet_name)
+
+        # 1) Try normal path
+        rows = ws.get_all_records()
+        if rows:
+            df = pd.DataFrame(rows)
+            df.columns = [str(c).strip() for c in df.columns]
+            return df
+
+        # 2) Fallback: raw values
+        values = ws.get_all_values()
+        if not values or len(values) < 2:
+            return pd.DataFrame()
+
+        header = _make_unique(values[0])
+        data = values[1:]
+
+        df = pd.DataFrame(data, columns=header)
+
+        # Drop columns with blank header
+        df = df.loc[:, [c for c in df.columns if c.strip() != ""]]
+
+        # Clean column names
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # Convert empty strings to NaN (helps numeric conversion later)
+        df = df.replace({"": pd.NA})
+
+        return df
+
+    except Exception as e:
+        # Optional: show the error in the app for debugging
+        st.caption(f"load_sheet error for '{worksheet_name}': {e}")
+        return pd.DataFrame()
+
 
 def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     """Keep df[col] as datetime for filtering + Altair. Normalise to midnight."""
@@ -668,12 +718,22 @@ food_week = pd.DataFrame()
 
 food = load_sheet(WS_FOOD_LOG)
 
+st.write("Food rows:", len(food))
+st.write("Food columns:", list(food.columns)[:20])
+
+
+# normalise column names
+food.columns = [str(c).strip() for c in food.columns]
+
+
 if food.empty:
     st.caption(f"{WS_FOOD_LOG} is empty (or missing).")
 else:
     food = food.copy()
 
     staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
+# ✅ this will still pass even if you have Servingsize + weight_g columns too
+
     raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
 
     if staging_cols.issubset(set(food.columns)):
