@@ -2,8 +2,10 @@ import altair as alt
 import streamlit as st
 import pandas as pd
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
-import math
+import random
+import time
 
 # ============================================================
 # Config: chart scales (edit here)
@@ -25,45 +27,57 @@ st.title("📊 Body Composition Tracker")
 # ============================================================
 # Google Sheets setup
 # ============================================================
-import json
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread.exceptions import APIError
-
 SHEET_ID = st.secrets["SHEET_ID"]
 
 SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-creds = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"],
-    scopes=SCOPES
-)
-
-gc = gspread.authorize(creds)
-
-try:
-    sh = gc.open_by_key(SHEET_ID)
-except APIError as e:
-    # Show a safe, useful error message (no secrets)
-    st.error("❌ Google Sheets API error while opening the spreadsheet.")
+def _is_429(e: Exception) -> bool:
+    if not isinstance(e, APIError):
+        return False
     try:
-        resp = e.response  # requests.Response
-        st.write("Status:", resp.status_code)
-        st.write("Reason:", resp.reason)
-        # This is usually safe; it contains Google error JSON (no keys)
-        st.code(resp.text, language="json")
+        return e.response is not None and e.response.status_code == 429
     except Exception:
-        st.write(str(e))
+        return False
+
+def with_backoff(fn, tries: int = 6, base: float = 0.8):
+    """Exponential backoff for Sheets 429 throttling."""
+    for i in range(tries):
+        try:
+            return fn()
+        except APIError as e:
+            if not _is_429(e) or i == tries - 1:
+                raise
+            sleep = base * (2 ** i) + random.random() * 0.25
+            time.sleep(sleep)
+
+@st.cache_resource(show_spinner=False)
+def get_spreadsheet(sheet_id: str):
+    """Cache gspread client + spreadsheet (prevents repeated metadata reads)."""
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES,
+    )
+    gc = gspread.authorize(creds)
+    sh = with_backoff(lambda: gc.open_by_key(sheet_id))
+    return sh
+
+sh = None
+try:
+    sh = get_spreadsheet(SHEET_ID)
+except APIError as e:
+    st.error("❌ Google Sheets API error while opening the spreadsheet.")
+    if _is_429(e):
+        st.caption("Status: 429 (Too Many Requests) — you hit the Sheets read quota. Try again in ~60 seconds.")
+    else:
+        st.caption(str(e))
     st.stop()
 except Exception as e:
-    st.error("❌ Unexpected error while opening the spreadsheet.")
-    st.write(str(e))
+    st.error("❌ Unexpected error opening spreadsheet.")
+    st.caption(str(e))
     st.stop()
-
 
 WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
@@ -79,21 +93,9 @@ WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
 # ============================================================
 # Helpers
 # ============================================================
-@st.cache_data(ttl=120, show_spinner=False)
-def _cached_get_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
-    """Cache records for 2 minutes to reduce Sheets calls."""
-    try:
-        ws = sh.worksheet(worksheet_name)
-        rows = ws.get_all_records()
-        return rows if rows else []
-    except Exception:
-        return []
-
 def ensure_df(x) -> pd.DataFrame:
     """Guarantee a DataFrame so .empty and .columns never crash."""
-    if isinstance(x, pd.DataFrame):
-        return x
-    return pd.DataFrame()
+    return x if isinstance(x, pd.DataFrame) else pd.DataFrame()
 
 def _make_unique(cols):
     """Make header names unique: weight_g, weight_g_1, weight_g_2 ..."""
@@ -102,7 +104,7 @@ def _make_unique(cols):
     for c in cols:
         c = (c or "").strip()
         if c == "":
-            out.append("")  # placeholder; we'll drop blank headers later
+            out.append("")  # placeholder; will be dropped
             continue
         if c not in seen:
             seen[c] = 0
@@ -112,33 +114,22 @@ def _make_unique(cols):
             out.append(f"{c}_{seen[c]}")
     return out
 
-def load_sheet(worksheet_name: str) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def load_sheet_cached(sheet_id: str, worksheet_name: str) -> pd.DataFrame:
     """
-    Safe loader that survives:
-      - duplicate headers (e.g., weight_g twice)
-      - blank header cells
-      - empty tabs
+    Low-request, quota-friendly loader:
+      - Uses get_all_values() (usually one read) instead of get_all_records()
+      - Survives duplicate headers (e.g., weight_g twice)
+      - Drops blank header columns
+      - Cached for 5 minutes
     """
     try:
         ws = sh.worksheet(worksheet_name)
-    except Exception as e:
-        st.caption(f"load_sheet: can't open worksheet '{worksheet_name}': {e}")
+    except Exception:
         return pd.DataFrame()
 
-    # ---- 1) Try get_all_records() (fast + typed), but it can fail on duplicate headers
     try:
-        rows = ws.get_all_records()
-        if rows:
-            df = pd.DataFrame(rows)
-            df.columns = [str(c).strip() for c in df.columns]
-            return df
-    except Exception as e:
-        # Important: DON'T return yet — fall back to get_all_values()
-        st.caption(f"load_sheet fallback for '{worksheet_name}': {e}")
-
-    # ---- 2) Fallback: raw grid (works even with duplicate/blank headers)
-    try:
-        values = ws.get_all_values()
+        values = with_backoff(lambda: ws.get_all_values())
         if not values or len(values) < 2:
             return pd.DataFrame()
 
@@ -156,12 +147,14 @@ def load_sheet(worksheet_name: str) -> pd.DataFrame:
 
         # Strip col names
         df.columns = [str(c).strip() for c in df.columns]
-
         return df
 
-    except Exception as e:
-        st.caption(f"load_sheet error for '{worksheet_name}' (fallback failed): {e}")
+    except Exception:
         return pd.DataFrame()
+
+def load_sheet(worksheet_name: str) -> pd.DataFrame:
+    """Wrapper for your existing code style."""
+    return load_sheet_cached(SHEET_ID, worksheet_name)
 
 def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     """Keep df[col] as datetime for filtering + Altair. Normalise to midnight."""
@@ -170,8 +163,11 @@ def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     out = df.copy()
     out[col] = pd.to_datetime(out[col], errors="coerce")
     # strip tz if present
-    if hasattr(out[col].dt, "tz") and out[col].dt.tz is not None:
-        out[col] = out[col].dt.tz_localize(None)
+    try:
+        if hasattr(out[col].dt, "tz") and out[col].dt.tz is not None:
+            out[col] = out[col].dt.tz_localize(None)
+    except Exception:
+        pass
     out[col] = out[col].dt.normalize()
     out = out.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
     return out
@@ -211,8 +207,11 @@ def filter_range(df: pd.DataFrame, start_date, end_date, date_col: str = "date")
 
     out = df.copy()
     out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
-    if hasattr(out[date_col].dt, "tz") and out[date_col].dt.tz is not None:
-        out[date_col] = out[date_col].dt.tz_localize(None)
+    try:
+        if hasattr(out[date_col].dt, "tz") and out[date_col].dt.tz is not None:
+            out[date_col] = out[date_col].dt.tz_localize(None)
+    except Exception:
+        pass
     out[date_col] = out[date_col].dt.normalize()
     out = out.dropna(subset=[date_col])
 
@@ -245,17 +244,6 @@ def metric_or_dash(x, fmt="{:.0f}"):
         return fmt.format(float(x))
     except Exception:
         return "—"
-
-def safe_domain(values: pd.Series, preferred_domain: list[float], pad_pct: float = 0.05):
-    v = pd.to_numeric(values, errors="coerce").dropna()
-    if v.empty:
-        return preferred_domain
-    vmin, vmax = float(v.min()), float(v.max())
-    pmin, pmax = float(preferred_domain[0]), float(preferred_domain[1])
-    if vmin >= pmin and vmax <= pmax:
-        return preferred_domain
-    pad = max(1e-6, (vmax - vmin) * pad_pct)
-    return [vmin - pad, vmax + pad]
 
 def coalesce_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for c in candidates:
@@ -755,22 +743,17 @@ food_view = pd.DataFrame()
 food_week = pd.DataFrame()
 
 food = load_sheet(WS_FOOD_LOG)
-st.write("Food rows:", len(food))
-st.write("Food cols:", list(food.columns))
-st.write(food.head(3))
 
 # normalise column names
 food.columns = [str(c).strip() for c in food.columns]
-
 
 if food.empty:
     st.caption(f"{WS_FOOD_LOG} is empty (or missing).")
 else:
     food = food.copy()
 
+    # Your staging columns (you may also have Servingsize, weight_g, weight_g_1, etc. — that's fine)
     staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
-# ✅ this will still pass even if you have Servingsize + weight_g columns too
-
     raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
 
     if staging_cols.issubset(set(food.columns)):
