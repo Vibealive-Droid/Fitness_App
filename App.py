@@ -730,10 +730,9 @@ food_view = pd.DataFrame()
 food_week = pd.DataFrame()
 
 food = load_sheet(WS_FOOD_LOG)
-
 st.write("Food rows:", len(food))
-st.write("Food columns:", list(food.columns)[:20])
-
+st.write("Food cols:", list(food.columns))
+st.write(food.head(3))
 
 # normalise column names
 food.columns = [str(c).strip() for c in food.columns]
