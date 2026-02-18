@@ -71,12 +71,13 @@ def ensure_df(x) -> pd.DataFrame:
     return pd.DataFrame()
 
 def _make_unique(cols):
+    """Make header names unique: weight_g, weight_g_1, weight_g_2 ..."""
     seen = {}
     out = []
     for c in cols:
         c = (c or "").strip()
-        if not c:
-            out.append("")  # keep placeholder; we'll drop blanks later
+        if c == "":
+            out.append("")  # placeholder; we'll drop blank headers later
             continue
         if c not in seen:
             seen[c] = 0
@@ -87,43 +88,55 @@ def _make_unique(cols):
     return out
 
 def load_sheet(worksheet_name: str) -> pd.DataFrame:
-    """Safe loader that survives duplicate/blank headers in Google Sheets."""
+    """
+    Safe loader that survives:
+      - duplicate headers (e.g., weight_g twice)
+      - blank header cells
+      - empty tabs
+    """
     try:
         ws = sh.worksheet(worksheet_name)
+    except Exception as e:
+        st.caption(f"load_sheet: can't open worksheet '{worksheet_name}': {e}")
+        return pd.DataFrame()
 
-        # 1) Try normal path
+    # ---- 1) Try get_all_records() (fast + typed), but it can fail on duplicate headers
+    try:
         rows = ws.get_all_records()
         if rows:
             df = pd.DataFrame(rows)
             df.columns = [str(c).strip() for c in df.columns]
             return df
+    except Exception as e:
+        # Important: DON'T return yet — fall back to get_all_values()
+        st.caption(f"load_sheet fallback for '{worksheet_name}': {e}")
 
-        # 2) Fallback: raw values
+    # ---- 2) Fallback: raw grid (works even with duplicate/blank headers)
+    try:
         values = ws.get_all_values()
         if not values or len(values) < 2:
             return pd.DataFrame()
 
-        header = _make_unique(values[0])
+        header_raw = values[0]
         data = values[1:]
 
+        header = _make_unique(header_raw)
         df = pd.DataFrame(data, columns=header)
 
-        # Drop columns with blank header
-        df = df.loc[:, [c for c in df.columns if c.strip() != ""]]
+        # Drop any columns that had blank header cells
+        df = df.loc[:, [c for c in df.columns if str(c).strip() != ""]]
 
-        # Clean column names
-        df.columns = [str(c).strip() for c in df.columns]
-
-        # Convert empty strings to NaN (helps numeric conversion later)
+        # Normalise empties
         df = df.replace({"": pd.NA})
+
+        # Strip col names
+        df.columns = [str(c).strip() for c in df.columns]
 
         return df
 
     except Exception as e:
-        # Optional: show the error in the app for debugging
-        st.caption(f"load_sheet error for '{worksheet_name}': {e}")
+        st.caption(f"load_sheet error for '{worksheet_name}' (fallback failed): {e}")
         return pd.DataFrame()
-
 
 def normalise_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
     """Keep df[col] as datetime for filtering + Altair. Normalise to midnight."""
