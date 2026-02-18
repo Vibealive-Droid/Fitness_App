@@ -242,6 +242,15 @@ def date_for_table(df: pd.DataFrame, col="date") -> pd.DataFrame:
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
 
+def ensure_df(name: str) -> pd.DataFrame:
+    v = globals().get(name, None)
+    return v if isinstance(v, pd.DataFrame) else pd.DataFrame()
+
+food_week  = ensure_df("food_week")
+energy_view = ensure_df("energy_view")
+food_view  = ensure_df("food_view")
+
+
 # ----------------------------
 # Week helpers (Monday week)
 # ----------------------------
@@ -1591,7 +1600,6 @@ if has_weekly_micros:
 # ============================================================
 # Patterns (selected range)
 # ============================================================
-import pandas as pd
 
 # Ensure food_view always exists
 if "food_view" not in globals() or food_view is None:
@@ -1605,7 +1613,10 @@ else:
     fv = food_view.copy()
 
     # make sure date is datetime for .dt usage
-    fv["date"] = pd.to_datetime(fv["date"], errors="coerce").dt.tz_localize(None)
+    fv["date"] = pd.to_datetime(fv["date"], errors="coerce")
+    if getattr(fv["date"].dt, "tz", None) is not None:
+        fv["date"] = fv["date"].dt.tz_localize(None)
+    fv["date"] = fv["date"].dt.normalize()
 
     # ---- Weekday vs weekend
     st.subheader("Weekday vs weekend (avg daily totals)")
@@ -1660,11 +1671,9 @@ else:
     # ---- Most common foods by time of day
     st.subheader("Most common foods by time of day")
     if "time" in fv.columns and fv["time"].notna().any() and "food_name" in fv.columns:
-        t1 = pd.to_datetime(fv["time"], format="%I:%M %p", errors="coerce")
-        t2 = pd.to_datetime(fv["time"], format="%H:%M", errors="coerce")
-        t = t1.fillna(t2)
+        t = pd.to_datetime(fv["time"], errors="coerce")
         fv["hour"] = t.dt.hour
-
+ 
         def bucket(h):
             if pd.isna(h):
                 return "Unknown"
@@ -1694,8 +1703,11 @@ else:
         .sum(numeric_only=True)
         .dropna()
     )
-    if not daily_macros.empty:
-        macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+        if not daily_macros.empty:
+            macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+            if macro_m.empty:
+        st.caption("No daily macro totals to chart in the selected range.")
+    else:
         st.altair_chart(
             alt.Chart(macro_m).mark_line(point=True).encode(
                 x=alt.X("date:T", title="Date"),
@@ -1749,6 +1761,8 @@ if not food_all.empty:
 
         # This week so far filter
         food_week = filter_range(food2, week_start, week_end, "date")
+
+        globals()["food_week"] = food_week
 
         if food_week.empty:
             st.caption("No food log rows this week so far.")
@@ -1900,8 +1914,8 @@ st.divider()
 st.header("✅ Consistency score (this week so far)")
 
 # Days elapsed this week (Mon->today inclusive)
-days_elapsed = (pd.Timestamp(week_end) - pd.Timestamp(week_start)).days + 1
-
+today = pd.Timestamp.today().normalize()
+days_elapsed = (today - pd.Timestamp(week_start)).days + 1
 # Days logged from daily_energy_week_logged (already computed)
 days_logged = int(len(daily_energy_week_logged)) if "daily_energy_week_logged" in globals() and not daily_energy_week_logged.empty else 0
 
