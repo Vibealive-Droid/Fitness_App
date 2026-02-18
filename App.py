@@ -1703,9 +1703,9 @@ else:
         .sum(numeric_only=True)
         .dropna()
     )
-        if not daily_macros.empty:
-            macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
-            if macro_m.empty:
+    if not daily_macros.empty:
+       macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+        if macro_m.empty:
         st.caption("No daily macro totals to chart in the selected range.")
     else:
         st.altair_chart(
