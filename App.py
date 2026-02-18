@@ -765,6 +765,12 @@ daily_energy_win = filter_range(daily_energy, start_monday, end_monday, "date")
 daily_energy_win = ensure_df(daily_energy_win)
 daily_energy_win_logged = pick_logged_days(daily_energy_win)
 
+# --- Ensure workout_log exists before filtering (fix NameError) ---
+workout_log = load_sheet(WS_WORKOUT_LOG)
+workout_log = normalise_workout_log_schema(workout_log)
+workout_log = normalise_date_col(workout_log, "date")
+workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
+
 workout_win = filter_range(workout_log, start_monday, end_monday, "date")
 workout_win = ensure_df(workout_win)
 
