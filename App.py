@@ -994,6 +994,31 @@ else:
     food_daily = pd.DataFrame()
 
 targets_daily = _targets_from_daily_energy(daily_energy_win_logged)
+# --- Guard: make sure both sides have a usable 'date' column before merge ---
+def _ensure_date_col(df: pd.DataFrame, name="date") -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=[name])
+    out = df.copy()
+    if name not in out.columns:
+        # common alternatives if something renamed it
+        for alt in ["Date", "day", "Day", "datetime", "date_time"]:
+            if alt in out.columns:
+                out = out.rename(columns={alt: name})
+                break
+    if name in out.columns:
+        out[name] = pd.to_datetime(out[name], errors="coerce").dt.normalize()
+        out = out.dropna(subset=[name])
+    else:
+        # still no date col -> return empty with date col so merge never crashes
+        return pd.DataFrame(columns=[name])
+    return out
+
+food_daily = _ensure_date_col(food_daily, "date")
+targets_daily = _ensure_date_col(targets_daily, "date")
+
+# If food_daily has no other columns, it's effectively missing -> keep merge but it will be targets-only
+daily_cmp = pd.merge(food_daily, targets_daily, on="date", how="outer")
+
 daily_cmp = pd.merge(food_daily, targets_daily, on="date", how="outer")
 
 if not daily_cmp.empty:
