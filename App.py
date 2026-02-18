@@ -774,6 +774,47 @@ workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir
 workout_win = filter_range(workout_log, start_monday, end_monday, "date")
 workout_win = ensure_df(workout_win)
 
+# --- Ensure food exists before filtering (fix NameError) ---
+food = load_sheet(WS_FOOD_LOG)
+food = ensure_df(food)
+food.columns = [str(c).strip() for c in food.columns]
+
+if not food.empty:
+    staging_cols = {"date", "time", "food_name", "calories_kcal", "protein_g", "carbs_g", "fat_g"}
+    raw_cols = {"Date", "Time", "Food Name", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"}
+
+    if staging_cols.issubset(set(food.columns)):
+        food = food.rename(columns={
+            "calories_kcal": "calories",
+            "protein_g": "protein",
+            "carbs_g": "carbs",
+            "fat_g": "fat",
+        })
+    elif raw_cols.issubset(set(food.columns)):
+        food = food.rename(columns={
+            "Date": "date",
+            "Time": "time",
+            "Food Name": "food_name",
+            "Calories (kcal)": "calories",
+            "Protein (g)": "protein",
+            "Carbs (g)": "carbs",
+            "Fat (g)": "fat",
+            "Fiber (g)": "fiber_g",
+            "Sodium (mg)": "sodium_mg",
+            "Potassium (mg)": "potassium_mg",
+            "Caffeine (mg)": "caffeine_mg",
+        })
+
+    food = normalise_date_col(food, "date")
+    food = normalise_fibre_fiber_cols(food)
+
+    for c in ["calories", "protein", "carbs", "fat", "fiber_g", "fibre_g", "sodium_mg", "potassium_mg", "caffeine_mg"]:
+        if c in food.columns:
+            food[c] = pd.to_numeric(food[c], errors="coerce")
+
+    if "food_name" in food.columns:
+        food["food_name"] = food["food_name"].astype(str).str.strip()
+
 food_win = filter_range(food, start_monday, end_monday, "date") if isinstance(food, pd.DataFrame) else pd.DataFrame()
 food_win = ensure_df(food_win)
 
