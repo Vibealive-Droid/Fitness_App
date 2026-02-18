@@ -242,9 +242,39 @@ def date_for_table(df: pd.DataFrame, col="date") -> pd.DataFrame:
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
 
-def ensure_df(name: str) -> pd.DataFrame:
-    v = globals().get(name, None)
-    return v if isinstance(v, pd.DataFrame) else pd.DataFrame()
+def ensure_df(x, default=None) -> pd.DataFrame:
+    """
+    Accepts either:
+      - a variable name (str) -> fetches from globals()
+      - a DataFrame (or None) -> returns a DataFrame
+    """
+    if default is None:
+        default = pd.DataFrame()
+
+    # Case 1: x is a variable name
+    if isinstance(x, str):
+        v = globals().get(x, None)
+        if v is None:
+            globals()[x] = default.copy()
+            return globals()[x]
+        if isinstance(v, pd.DataFrame):
+            return v
+        try:
+            globals()[x] = pd.DataFrame(v)
+        except Exception:
+            globals()[x] = default.copy()
+        return globals()[x]
+
+    # Case 2: x is already a df/thing
+    if x is None:
+        return default.copy()
+    if isinstance(x, pd.DataFrame):
+        return x
+    try:
+        return pd.DataFrame(x)
+    except Exception:
+        return default.copy()
+
 
 food_week  = ensure_df("food_week")
 energy_view = ensure_df("energy_view")
@@ -757,7 +787,7 @@ workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir
 
 # ✅ workout_week must be a DataFrame
 workout_week = filter_range(workout_log, week_start, week_end, "date")
-workout_week = ensure_df(workout_week)
+workout_week = ensure_df("workout_week")
 
 # st.caption(f"workout_week type: {type(workout_week)} rows: {len(workout_week)}")
 
