@@ -251,6 +251,14 @@ def monday_of(d: pd.Timestamp) -> pd.Timestamp:
 
 def sunday_of_week(d: pd.Timestamp) -> pd.Timestamp:
     return monday_of(d) + pd.Timedelta(days=6)
+import pandas as pd
+
+food_view = pd.DataFrame()
+energy_view = pd.DataFrame()  # optional but consistent
+
+# ... later, assign them if data exists ...
+# food_view = build_food_view(...)
+# energy_view = build_energy_view(...)
 
 # ----------------------------
 # Schema normalisers
@@ -1494,24 +1502,31 @@ elif phase == "BULK":
 else:
     st.warning(f"🟨 **RECOMP**  \nNear maintenance • Confidence: **{phase_conf}**\n\nAvg energy balance: **{avg_balance:.0f} kcal/day**" if avg_balance is not None else "🟨 **RECOMP**")
     st.info("Recomp focus: prioritise training consistency + protein; keep calories near maintenance.")
-
 # ============================================================
 # 🍗 This week so far — Macro totals
 # ============================================================
 st.subheader("🍗 This week so far — Macros")
 
+# ---- Safety defaults (prevents NameError if upstream blocks didn't run)
+if "food_week" not in globals() or food_week is None:
+    food_week = pd.DataFrame()
+
+if "energy_view" not in globals() or energy_view is None:
+    energy_view = pd.DataFrame()
+
+# ---- Macros summary
 if food_week.empty:
     st.caption("No food rows this week so far.")
 else:
     weekly_totals = (
-        food_week.groupby("date", as_index=False)[["calories","protein","carbs","fat"]]
+        food_week.groupby("date", as_index=False)[["calories", "protein", "carbs", "fat"]]
         .sum(numeric_only=True)
     )
 
-    avg_day = weekly_totals[["calories","protein","carbs","fat"]].mean(numeric_only=True)
-    total_week = weekly_totals[["calories","protein","carbs","fat"]].sum(numeric_only=True)
+    avg_day = weekly_totals[["calories", "protein", "carbs", "fat"]].mean(numeric_only=True)
+    total_week = weekly_totals[["calories", "protein", "carbs", "fat"]].sum(numeric_only=True)
 
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Calories avg/day", f"{avg_day['calories']:.0f}")
     with c2:
@@ -1528,45 +1543,60 @@ else:
         f"Fat: {total_week['fat']:.0f}g"
     )
 
+# ============================================================
+# Optional: latest available week micros from Weekly_Energy
+# (ONLY if those columns exist, otherwise don't show it)
+# ============================================================
+micro_cols = ["avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg"]
+has_weekly_micros = (not energy_view.empty) and any(c in energy_view.columns for c in micro_cols)
 
-if food_week.empty:
-    st.caption("No food rows this week so far.")
+if has_weekly_micros:
+    st.subheader("🗓️ Micronutrients (latest available week in Weekly_Energy)")
 
-    # ============================================================
-    # Optional: latest available week micros from Weekly_Energy
-    # (ONLY if those columns exist, otherwise don't show it)
-    # ============================================================
-    micro_cols = ["avg_fiber_g", "avg_sodium_mg", "avg_potassium_mg", "avg_caffeine_mg"]
-    has_weekly_micros = ("energy_view" in globals()) and (not energy_view.empty) and any(c in energy_view.columns for c in micro_cols)
+    micros_week = energy_view.copy()
+    for c in micro_cols:
+        if c in micros_week.columns:
+            micros_week[c] = pd.to_numeric(micros_week[c], errors="coerce")
 
-    if has_weekly_micros:
-        st.subheader("🗓️ Micronutrients (latest available week in Weekly_Energy)")
-        micros_week = energy_view.copy()
-        for c in micro_cols:
-            if c in micros_week.columns:
-                micros_week[c] = pd.to_numeric(micros_week[c], errors="coerce")
+    # Prefer the latest week with at least one micro populated
+    pick = micros_week.dropna(
+        subset=[c for c in micro_cols if c in micros_week.columns],
+        how="all"
+    )
 
-        pick = micros_week.dropna(subset=[c for c in micro_cols if c in micros_week.columns], how="all")
-        row = (pick.sort_values("date").tail(1) if not pick.empty else micros_week.sort_values("date").tail(1)).iloc[0]
+    # If energy_view has no 'date' column for some reason, fall back safely
+    if "date" in micros_week.columns:
+        row = (
+            pick.sort_values("date").tail(1) if not pick.empty
+            else micros_week.sort_values("date").tail(1)
+        ).iloc[0]
+    else:
+        row = (pick.tail(1) if not pick.empty else micros_week.tail(1)).iloc[0]
 
-        wf = row.get("avg_fiber_g", pd.NA)
-        ws = row.get("avg_sodium_mg", pd.NA)
-        wp = row.get("avg_potassium_mg", pd.NA)
-        wc = row.get("avg_caffeine_mg", pd.NA)
+    wf = row.get("avg_fiber_g", pd.NA)
+    ws = row.get("avg_sodium_mg", pd.NA)
+    wp = row.get("avg_potassium_mg", pd.NA)
+    wc = row.get("avg_caffeine_mg", pd.NA)
 
-        w1, w2, w3, w4 = st.columns(4)
-        with w1:
-            st.metric("Fiber (avg/day)", metric_or_dash(wf, "{:.1f} g"))
-        with w2:
-            st.metric("Sodium (avg/day)", metric_or_dash(ws, "{:.0f} mg"))
-        with w3:
-            st.metric("Potassium (avg/day)", metric_or_dash(wp, "{:.0f} mg"))
-        with w4:
-            st.metric("Caffeine (avg/day)", metric_or_dash(wc, "{:.0f} mg"))
+    w1, w2, w3, w4 = st.columns(4)
+    with w1:
+        st.metric("Fiber (avg/day)", metric_or_dash(wf, "{:.1f} g"))
+    with w2:
+        st.metric("Sodium (avg/day)", metric_or_dash(ws, "{:.0f} mg"))
+    with w3:
+        st.metric("Potassium (avg/day)", metric_or_dash(wp, "{:.0f} mg"))
+    with w4:
+        st.metric("Caffeine (avg/day)", metric_or_dash(wc, "{:.0f} mg"))
 
 # ============================================================
 # Patterns (selected range)
 # ============================================================
+import pandas as pd
+
+# Ensure food_view always exists
+if "food_view" not in globals() or food_view is None:
+    food_view = pd.DataFrame()
+
 st.subheader("📈 Patterns — Selected range")
 
 if food_view.empty:
