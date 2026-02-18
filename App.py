@@ -746,6 +746,21 @@ start_monday = end_monday - pd.Timedelta(days=7)
 
 st.caption(f"Compliance window: **{start_monday.date()} → {end_monday.date()}** (Mon→Mon)")
 
+# --- Ensure daily_energy exists before filtering (fix NameError) ---
+daily_energy = load_sheet(WS_DAILY_ENERGY)
+daily_energy = normalise_daily_energy_schema(daily_energy)
+daily_energy = normalise_date_col(daily_energy, "date")
+
+# If you rely on numeric columns in compliance calcs, coerce here too:
+daily_energy = to_num(daily_energy, [
+    "days_logged_flag", "calories", "expenditure", "calorie_target", "calorie_delta",
+    "protein_g", "carbs_g", "fat_g",
+    "protein_target_g", "carbs_target_g", "fat_target_g",
+    "protein_adherence", "energy_adherence",
+    "steps"
+])
+
+
 daily_energy_win = filter_range(daily_energy, start_monday, end_monday, "date")
 daily_energy_win = ensure_df(daily_energy_win)
 daily_energy_win_logged = pick_logged_days(daily_energy_win)
