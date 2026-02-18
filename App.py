@@ -25,6 +25,12 @@ st.title("📊 Body Composition Tracker")
 # ============================================================
 # Google Sheets setup
 # ============================================================
+import json
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread.exceptions import APIError
+
 SHEET_ID = st.secrets["SHEET_ID"]
 
 SCOPES = [
@@ -38,7 +44,26 @@ creds = Credentials.from_service_account_info(
 )
 
 gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_ID)
+
+try:
+    sh = gc.open_by_key(SHEET_ID)
+except APIError as e:
+    # Show a safe, useful error message (no secrets)
+    st.error("❌ Google Sheets API error while opening the spreadsheet.")
+    try:
+        resp = e.response  # requests.Response
+        st.write("Status:", resp.status_code)
+        st.write("Reason:", resp.reason)
+        # This is usually safe; it contains Google error JSON (no keys)
+        st.code(resp.text, language="json")
+    except Exception:
+        st.write(str(e))
+    st.stop()
+except Exception as e:
+    st.error("❌ Unexpected error while opening the spreadsheet.")
+    st.write(str(e))
+    st.stop()
+
 
 WS_BODY_WEEKLY = "Weekly_BodyComp"
 WS_ENERGY_WEEKLY = "Weekly_Energy"
