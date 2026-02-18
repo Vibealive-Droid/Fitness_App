@@ -1696,15 +1696,21 @@ else:
     else:
         st.caption("No usable time data available in the selected range.")
 
-    # ---- Daily macros chart
+        # ---- Daily macros chart
     st.subheader("Daily macros over time (grams)")
+
     daily_macros = (
         fv.groupby("date", as_index=False)[["protein", "carbs", "fat"]]
         .sum(numeric_only=True)
         .dropna()
     )
+
+    # Always define macro_m so we can safely reference it
+    macro_m = pd.DataFrame()
+
     if not daily_macros.empty:
-       macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+        macro_m = daily_macros.melt("date", var_name="macro", value_name="grams").dropna()
+
     if macro_m.empty:
         st.caption("No daily macro totals to chart in the selected range.")
     else:
