@@ -1125,6 +1125,14 @@ with c4:
 with c5:
     st.metric("Steps ≥8000", f"{steps_avg:.0f}" if pd.notna(steps_avg) else "—")
 
+
+st.write("food_daily rows/cols", food_daily.shape, list(food_daily.columns))
+st.write("targets_daily rows/cols", targets_daily.shape, list(targets_daily.columns))
+st.write("daily_cmp rows/cols", daily_cmp.shape, list(daily_cmp.columns))
+st.write(daily_cmp.head(3))
+
+
+
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
