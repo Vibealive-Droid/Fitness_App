@@ -858,13 +858,6 @@ if not daily_energy_logged.empty:
             proxy_ok = adh.notna() & adh.ge(1.0 - MACRO_TOL)
             macro_ok_pct = (proxy_ok.sum() / adh.notna().sum()) * 100 if adh.notna().any() else pd.NA
 
-# --- Optional debug (now safe) ---
-with st.expander("Debug: Daily_Energy (compliance window)", expanded=False):
-    st.write("Rows:", len(daily_energy_logged))
-    st.write("Columns:", list(daily_energy_logged.columns))
-    st.dataframe(daily_energy_logged.head(10), hide_index=True)
-
-
 if not daily_energy_logged.empty:
     de = daily_energy_logged.copy()
 
