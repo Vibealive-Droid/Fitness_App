@@ -793,6 +793,31 @@ daily_energy_win = filter_range(daily_energy, start_monday, end_sunday, "date")
 daily_energy_win = ensure_df(daily_energy_win)
 daily_energy_logged = pick_logged_days(daily_energy_win)
 
+# --- Debug: show what Daily_Energy actually contains (remove later) ---
+with st.expander("Debug: Daily_Energy columns (compliance window)"):
+    st.write("Columns:", list(daily_energy_logged.columns))
+    st.write(daily_energy_logged[["date"] + [c for c in [
+        "calories","calorie_target",
+        "protein_g","carbs_g","fat_g",
+        "protein_target_g","carbs_target_g","fat_target_g",
+        "protein_adherence","energy_adherence",
+        "steps"
+    ] if c in daily_energy_logged.columns]].head(10))
+
+# --- If macro targets are missing/zero, fallback to adherence-based macros ---
+if pd.isna(macro_ok_pct) or (macro_ok_pct == 0 and (
+    ("protein_target_g" not in daily_energy_logged.columns) or
+    ("carbs_target_g" not in daily_energy_logged.columns) or
+    ("fat_target_g" not in daily_energy_logged.columns) or
+    (daily_energy_logged.get("protein_target_g", pd.Series([0])).fillna(0).sum() == 0)
+)):
+    # If you have a "protein_adherence" style value (0-1), use that as a proxy
+    # NOTE: This does NOT test carbs/fat individually; it’s a “macro compliance proxy”.
+    if "protein_adherence" in daily_energy_logged.columns:
+        adh = pd.to_numeric(daily_energy_logged["protein_adherence"], errors="coerce")
+        # count a day "macro ok" if protein adherence is within 10% of target (i.e., >= 0.90)
+        macro_ok_pct = (adh.ge(0.90).sum() / adh.notna().sum()) * 100 if adh.notna().any() else pd.NA
+
 days_logged = int(len(daily_energy_logged)) if not daily_energy_logged.empty else 0
 logging_ok = days_logged >= MIN_LOG_DAYS
 
