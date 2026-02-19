@@ -792,119 +792,15 @@ daily_energy = to_num(daily_energy, [
 daily_energy_win = filter_range(daily_energy, start_monday, end_sunday, "date")
 daily_energy_win = ensure_df(daily_energy_win)
 daily_energy_logged = pick_logged_days(daily_energy_win)
+# Back-compat alias (older code referenced this name)
+daily_energy_win_logged = daily_energy_logged
 
-# -------------------------
-# Safe init (prevents NameError)
-# -------------------------
-cal_ok_pct = pd.NA
-macro_ok_pct = pd.NA
-steps_avg = pd.NA
-
-# --- Debug expander (optional; remove later) ---
-with st.expander("Debug: Daily_Energy (compliance window)", expanded=False):
-    st.write("Columns:", list(daily_energy_win_logged.columns))
-    show_cols = [c for c in [
-        "date",
-        "calories","calorie_target",
-        "protein_g","carbs_g","fat_g",
-        "protein_target_g","carbs_target_g","fat_target_g",
-        "protein_adherence","energy_adherence",
-        "steps"
-    ] if c in daily_energy_win_logged.columns]
-    if show_cols:
-        st.write(daily_energy_win_logged[show_cols].head(10))
-    else:
-        st.write(daily_energy_win_logged.head(10))
-
-# -------------------------
-# Steps avg
-# -------------------------
-if not daily_energy_win_logged.empty and "steps" in daily_energy_win_logged.columns:
-    steps_avg = pd.to_numeric(daily_energy_win_logged["steps"], errors="coerce").mean()
-
-# -------------------------
-# Calories ± tolerance (needs calories + calorie_target)
-# -------------------------
-if (not daily_energy_win_logged.empty
-    and "calories" in daily_energy_win_logged.columns
-    and "calorie_target" in daily_energy_win_logged.columns):
-
-    de = daily_energy_win_logged.copy()
-    a = pd.to_numeric(de["calories"], errors="coerce")
-    t = pd.to_numeric(de["calorie_target"], errors="coerce")
-
-    cal_ok = (a.notna() & t.notna() & (t != 0) & ((a - t).abs() <= (t.abs() * CAL_TOL)))
-    cal_ok_pct = (cal_ok.sum() / cal_ok.shape[0]) * 100 if cal_ok.shape[0] else pd.NA
-
-# -------------------------
-# Macros ± tolerance (protein+carbs+fat vs targets)
-# If targets missing/zero → fallback to protein_adherence proxy (>= 0.90)
-# -------------------------
-de = daily_energy_win_logged.copy()
-
-has_actuals = all(c in de.columns for c in ["protein_g", "carbs_g", "fat_g"])
-has_targets = all(c in de.columns for c in ["protein_target_g", "carbs_target_g", "fat_target_g"])
-
-targets_populated = False
-if has_targets:
-    pt = pd.to_numeric(de["protein_target_g"], errors="coerce").fillna(0)
-    ct = pd.to_numeric(de["carbs_target_g"], errors="coerce").fillna(0)
-    ft = pd.to_numeric(de["fat_target_g"], errors="coerce").fillna(0)
-    targets_populated = (pt.sum() + ct.sum() + ft.sum()) > 0
-
-if (not de.empty) and has_actuals and has_targets and targets_populated:
-    p = pd.to_numeric(de["protein_g"], errors="coerce")
-    c = pd.to_numeric(de["carbs_g"], errors="coerce")
-    f = pd.to_numeric(de["fat_g"], errors="coerce")
-
-    pt = pd.to_numeric(de["protein_target_g"], errors="coerce")
-    ct = pd.to_numeric(de["carbs_target_g"], errors="coerce")
-    ft = pd.to_numeric(de["fat_target_g"], errors="coerce")
-
-    p_ok = p.notna() & pt.notna() & (pt != 0) & ((p - pt).abs() <= (pt.abs() * MACRO_TOL))
-    c_ok = c.notna() & ct.notna() & (ct != 0) & ((c - ct).abs() <= (ct.abs() * MACRO_TOL))
-    f_ok = f.notna() & ft.notna() & (ft != 0) & ((f - ft).abs() <= (ft.abs() * MACRO_TOL))
-
-    macros_ok = p_ok & c_ok & f_ok
-    macro_ok_pct = (macros_ok.sum() / macros_ok.shape[0]) * 100 if macros_ok.shape[0] else pd.NA
-
-else:
-    # Fallback proxy: if you have protein_adherence (0..1), treat >=0.90 as "macro ok"
-    if "protein_adherence" in de.columns:
-        adh = pd.to_numeric(de["protein_adherence"], errors="coerce")
-        proxy_ok = adh.notna() & adh.ge(1.0 - MACRO_TOL)
-        macro_ok_pct = (proxy_ok.sum() / proxy_ok.shape[0]) * 100 if proxy_ok.shape[0] else pd.NA
-
-
-# --- Debug: show what Daily_Energy actually contains (remove later) ---
-with st.expander("Debug: Daily_Energy columns (compliance window)"):
-    st.write("Columns:", list(daily_energy_logged.columns))
-    st.write(daily_energy_logged[["date"] + [c for c in [
-        "calories","calorie_target",
-        "protein_g","carbs_g","fat_g",
-        "protein_target_g","carbs_target_g","fat_target_g",
-        "protein_adherence","energy_adherence",
-        "steps"
-    ] if c in daily_energy_logged.columns]].head(10))
-
-# --- If macro targets are missing/zero, fallback to adherence-based macros ---
-if pd.isna(macro_ok_pct) or (macro_ok_pct == 0 and (
-    ("protein_target_g" not in daily_energy_logged.columns) or
-    ("carbs_target_g" not in daily_energy_logged.columns) or
-    ("fat_target_g" not in daily_energy_logged.columns) or
-    (daily_energy_logged.get("protein_target_g", pd.Series([0])).fillna(0).sum() == 0)
-)):
-    # If you have a "protein_adherence" style value (0-1), use that as a proxy
-    # NOTE: This does NOT test carbs/fat individually; it’s a “macro compliance proxy”.
-    if "protein_adherence" in daily_energy_logged.columns:
-        adh = pd.to_numeric(daily_energy_logged["protein_adherence"], errors="coerce")
-        # count a day "macro ok" if protein adherence is within 10% of target (i.e., >= 0.90)
-        macro_ok_pct = (adh.ge(0.90).sum() / adh.notna().sum()) * 100 if adh.notna().any() else pd.NA
-
+# ============================================================
+# Compute compliance metrics (single pass, no duplicates)
+# ============================================================
 days_logged = int(len(daily_energy_logged)) if not daily_energy_logged.empty else 0
 logging_ok = days_logged >= MIN_LOG_DAYS
 
-# Defaults
 cal_ok_pct = pd.NA
 macro_ok_pct = pd.NA
 steps_avg = pd.NA
@@ -913,20 +809,64 @@ steps_ok = False
 if not daily_energy_logged.empty:
     de = daily_energy_logged.copy()
 
-    # Steps average across logged days
+    # Steps
     if "steps" in de.columns:
         steps_avg = _safe_mean(de["steps"])
         steps_ok = (pd.notna(steps_avg) and float(steps_avg) >= TARGET_STEPS)
 
-    # Calories compliance: % logged days within tolerance
-    cal_flags = []
+    # Calories ± tolerance
     if "calories" in de.columns and "calorie_target" in de.columns:
-        for _, r in de.iterrows():
-            a = pd.to_numeric(r.get("calories"), errors="coerce")
-            t = pd.to_numeric(r.get("calorie_target"), errors="coerce")
-            cal_flags.append(_within_tol(a, t, CAL_TOL))
-        if len(cal_flags):
-            cal_ok_pct = (sum(cal_flags) / len(cal_flags)) * 100.0
+        a = pd.to_numeric(de["calories"], errors="coerce")
+        t = pd.to_numeric(de["calorie_target"], errors="coerce")
+        cal_ok = a.notna() & t.notna() & (t != 0) & ((a - t).abs() <= (t.abs() * CAL_TOL))
+        cal_ok_pct = (cal_ok.sum() / len(de)) * 100 if len(de) else pd.NA
+
+    # Macros ± tolerance (prefer explicit macro targets when populated)
+    needed_actuals = ["protein_g", "carbs_g", "fat_g"]
+    needed_targets = ["protein_target_g", "carbs_target_g", "fat_target_g"]
+
+    has_actuals = all(c in de.columns for c in needed_actuals)
+    has_targets = all(c in de.columns for c in needed_targets)
+
+    targets_populated = False
+    if has_targets:
+        pt = pd.to_numeric(de["protein_target_g"], errors="coerce").fillna(0)
+        ct = pd.to_numeric(de["carbs_target_g"], errors="coerce").fillna(0)
+        ft = pd.to_numeric(de["fat_target_g"], errors="coerce").fillna(0)
+        targets_populated = (pt.sum() + ct.sum() + ft.sum()) > 0
+
+    if has_actuals and has_targets and targets_populated:
+        p = pd.to_numeric(de["protein_g"], errors="coerce")
+        c = pd.to_numeric(de["carbs_g"], errors="coerce")
+        f = pd.to_numeric(de["fat_g"], errors="coerce")
+
+        pt = pd.to_numeric(de["protein_target_g"], errors="coerce")
+        ct = pd.to_numeric(de["carbs_target_g"], errors="coerce")
+        ft = pd.to_numeric(de["fat_target_g"], errors="coerce")
+
+        p_ok = p.notna() & pt.notna() & (pt != 0) & ((p - pt).abs() <= (pt.abs() * MACRO_TOL))
+        c_ok = c.notna() & ct.notna() & (ct != 0) & ((c - ct).abs() <= (ct.abs() * MACRO_TOL))
+        f_ok = f.notna() & ft.notna() & (ft != 0) & ((f - ft).abs() <= (ft.abs() * MACRO_TOL))
+
+        macros_ok = p_ok & c_ok & f_ok
+        macro_ok_pct = (macros_ok.sum() / len(de)) * 100 if len(de) else pd.NA
+
+    else:
+        # Fallback: protein adherence proxy (>= 0.90)
+        if "protein_adherence" in de.columns:
+            adh = pd.to_numeric(de["protein_adherence"], errors="coerce")
+            proxy_ok = adh.notna() & adh.ge(1.0 - MACRO_TOL)
+            macro_ok_pct = (proxy_ok.sum() / adh.notna().sum()) * 100 if adh.notna().any() else pd.NA
+
+# --- Optional debug (now safe) ---
+with st.expander("Debug: Daily_Energy (compliance window)", expanded=False):
+    st.write("Rows:", len(daily_energy_logged))
+    st.write("Columns:", list(daily_energy_logged.columns))
+    st.dataframe(daily_energy_logged.head(10), hide_index=True)
+
+
+if not daily_energy_logged.empty:
+    de = daily_energy_logged.copy()
 
     # Macros compliance: % logged days where ALL macros are within tolerance
     macro_flags = []
