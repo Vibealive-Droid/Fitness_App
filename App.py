@@ -736,7 +736,7 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined["volume_per_minute"] = vol / minutes
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 # ============================================================
-# ✅ Compliance (Mon -> Sun) — Matt Standard (loud + defensive)
+# ✅ Compliance (Mon -> Sun) — Matt Standard (single source of truth)
 # ============================================================
 st.subheader("✅ Compliance (Mon → Sun) — Matt Standard")
 
@@ -746,39 +746,34 @@ TARGET_MINUTES = 200
 TARGET_STEPS = 8000
 CAL_TOL = 0.10
 MACRO_TOL = 0.10
+MIN_LOG_DAYS = 6  # Matt standard: 6/7 logged days
 
 today_ts = pd.Timestamp.today().normalize()
 this_monday = monday_of(today_ts)
 
-# Last full week: Mon -> Sun (7 days)
+# Last full week: Mon -> Sun
 start_monday = this_monday - pd.Timedelta(days=7)
 end_sunday = start_monday + pd.Timedelta(days=6)
 
 st.caption(f"Compliance window: **{start_monday.date()} → {end_sunday.date()}** (Mon→Sun)")
 
 # -------------------------
-# Helpers for compliance
+# Small helpers
 # -------------------------
-def pct(x):
-    if x is None or pd.isna(x):
-        return pd.NA
-    try:
-        return float(x) * 100.0
-    except Exception:
-        return pd.NA
-
-def within_tol(actual, target, tol):
-    if pd.isna(actual) or pd.isna(target) or target == 0:
+def _within_tol(actual, target, tol):
+    if pd.isna(actual) or pd.isna(target) or float(target) == 0:
         return False
-    return abs(float(actual) - float(target)) <= (float(target) * float(tol))
+    return abs(float(actual) - float(target)) <= (abs(float(target)) * float(tol))
 
-def safe_mean(series):
+def _safe_mean(series):
     s = pd.to_numeric(series, errors="coerce")
     return s.mean() if s.notna().any() else pd.NA
 
-def safe_sum(series):
-    s = pd.to_numeric(series, errors="coerce")
-    return s.sum() if s.notna().any() else pd.NA
+def _score_label(score: int) -> str:
+    if score >= 85: return "Locked In 🔥"
+    if score >= 70: return "Solid ✅"
+    if score >= 55: return "Okay — Tighten Up"
+    return "Tighten Up ⚠️"
 
 # ============================================================
 # 1) DAILY ENERGY (logging, calories, macros, steps)
@@ -787,66 +782,59 @@ daily_energy = load_sheet(WS_DAILY_ENERGY)
 daily_energy = normalise_daily_energy_schema(daily_energy)
 daily_energy = normalise_date_col(daily_energy, "date")
 daily_energy = to_num(daily_energy, [
-    "days_logged_flag", "calories", "expenditure", "calorie_target", "calorie_delta",
+    "days_logged_flag",
+    "calories", "expenditure", "calorie_target",
     "protein_g", "carbs_g", "fat_g",
     "protein_target_g", "carbs_target_g", "fat_target_g",
-    "protein_adherence", "energy_adherence",
     "steps"
 ])
 
 daily_energy_win = filter_range(daily_energy, start_monday, end_sunday, "date")
 daily_energy_win = ensure_df(daily_energy_win)
-daily_energy_win_logged = pick_logged_days(daily_energy_win)
+daily_energy_logged = pick_logged_days(daily_energy_win)
 
-days_elapsed = 7
-days_logged = int(len(daily_energy_win_logged)) if not daily_energy_win_logged.empty else 0
-logging_ok = days_logged >= 5  # choose your standard (5/7 is a good default)
+days_logged = int(len(daily_energy_logged)) if not daily_energy_logged.empty else 0
+logging_ok = days_logged >= MIN_LOG_DAYS
 
-# Calories compliance: % of logged days where calories within ±10% of target
+# Defaults
 cal_ok_pct = pd.NA
 macro_ok_pct = pd.NA
 steps_avg = pd.NA
+steps_ok = False
 
-if not daily_energy_win_logged.empty:
-    de = daily_energy_win_logged.copy()
+if not daily_energy_logged.empty:
+    de = daily_energy_logged.copy()
 
-    # Steps avg (logged days)
+    # Steps average across logged days
     if "steps" in de.columns:
-        steps_avg = safe_mean(de["steps"])
+        steps_avg = _safe_mean(de["steps"])
+        steps_ok = (pd.notna(steps_avg) and float(steps_avg) >= TARGET_STEPS)
 
-    # Calories tolerance vs target
+    # Calories compliance: % logged days within tolerance
+    cal_flags = []
     if "calories" in de.columns and "calorie_target" in de.columns:
-        cal_ok = []
         for _, r in de.iterrows():
             a = pd.to_numeric(r.get("calories"), errors="coerce")
             t = pd.to_numeric(r.get("calorie_target"), errors="coerce")
-            cal_ok.append(within_tol(a, t, CAL_TOL))
-        cal_ok_pct = (sum(cal_ok) / len(cal_ok) * 100.0) if len(cal_ok) else pd.NA
+            cal_flags.append(_within_tol(a, t, CAL_TOL))
+        if len(cal_flags):
+            cal_ok_pct = (sum(cal_flags) / len(cal_flags)) * 100.0
 
-    # Macros tolerance vs targets (all 3 within tolerance on a day)
-    macro_cols = [("protein_g", "protein_target_g"), ("carbs_g", "carbs_target_g"), ("fat_g", "fat_target_g")]
-    has_macro_targets = all(c in de.columns for c in ["protein_g", "carbs_g", "fat_g"]) and any(t in de.columns for _, t in macro_cols)
-
-    if has_macro_targets:
-        macro_ok = []
+    # Macros compliance: % logged days where ALL macros are within tolerance
+    macro_flags = []
+    needed = ["protein_g", "carbs_g", "fat_g", "protein_target_g", "carbs_target_g", "fat_target_g"]
+    has_macros = all(c in de.columns for c in needed)
+    if has_macros:
         for _, r in de.iterrows():
-            ok_list = []
-            for actual_col, target_col in macro_cols:
-                a = pd.to_numeric(r.get(actual_col), errors="coerce")
-                t = pd.to_numeric(r.get(target_col), errors="coerce")
-                if pd.isna(t) or t == 0:
-                    # If target missing, don't count this macro as pass/fail
-                    ok_list.append(None)
-                else:
-                    ok_list.append(within_tol(a, t, MACRO_TOL))
-
-            # Count day as macro-compliant if all macros that HAVE targets are within tolerance
-            usable = [x for x in ok_list if x is not None]
-            macro_ok.append(all(usable) if usable else False)
-
-        macro_ok_pct = (sum(macro_ok) / len(macro_ok) * 100.0) if len(macro_ok) else pd.NA
-
-steps_ok = (pd.notna(steps_avg) and float(steps_avg) >= TARGET_STEPS)
+            p_ok = _within_tol(pd.to_numeric(r.get("protein_g"), errors="coerce"),
+                               pd.to_numeric(r.get("protein_target_g"), errors="coerce"), MACRO_TOL)
+            c_ok = _within_tol(pd.to_numeric(r.get("carbs_g"), errors="coerce"),
+                               pd.to_numeric(r.get("carbs_target_g"), errors="coerce"), MACRO_TOL)
+            f_ok = _within_tol(pd.to_numeric(r.get("fat_g"), errors="coerce"),
+                               pd.to_numeric(r.get("fat_target_g"), errors="coerce"), MACRO_TOL)
+            macro_flags.append(bool(p_ok and c_ok and f_ok))
+        if len(macro_flags):
+            macro_ok_pct = (sum(macro_flags) / len(macro_flags)) * 100.0
 
 # ============================================================
 # 2) WORKOUT LOG (workouts + minutes)
@@ -865,7 +853,7 @@ minutes_done = pd.NA
 if not workout_win.empty and "date" in workout_win.columns:
     wk = workout_win.copy()
 
-    # Session key best-effort (use workout name if present)
+    # session_key: date + workout name if present (prevents sets being counted as workouts)
     if "workout" in wk.columns:
         wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
     else:
@@ -873,55 +861,36 @@ if not workout_win.empty and "date" in workout_win.columns:
 
     workouts_done = int(wk["session_key"].nunique())
 
-    # Duration: MacroFactor sometimes logs duration per-set; take max per session then sum
+    # duration: take max per session (MacroFactor can repeat duration per set), sum sessions
     if "workout_duration" in wk.columns:
-        mins = pd.to_numeric(wk.groupby("session_key")["workout_duration"].max(), errors="coerce")
-        minutes_done = float((mins / 60.0).sum()) if mins.notna().any() else pd.NA
+        mins = pd.to_numeric(wk.groupby("session_key")["workout_duration"].max(), errors="coerce") / 60.0
+        minutes_done = float(mins.sum()) if mins.notna().any() else pd.NA
 
 training_ok = (workouts_done >= TARGET_WORKOUTS) and (pd.notna(minutes_done) and float(minutes_done) >= TARGET_MINUTES)
 
 # ============================================================
-# 3) FOOD LOG (optional: only used if you want cross-check)
-#    NOTE: We do NOT require food log for compliance because Daily_Energy already contains macros/targets.
+# 3) Score
 # ============================================================
-# (Intentionally skipped as "required" — reduces errors & API calls)
-
-# ============================================================
-# Score + Labels
-# ============================================================
-def score_label(score: int) -> str:
-    if score >= 85: return "Locked In 🔥"
-    if score >= 70: return "Solid ✅"
-    if score >= 55: return "Okay — Tighten Up"
-    return "Tighten Up ⚠️"
-
-# Weighted score (tweak weights as you like)
 score = 0
 score += 20 if logging_ok else 0
 
 if pd.notna(cal_ok_pct):
-    score += int(round((float(cal_ok_pct) / 100.0) * 30))   # up to 30 points
-else:
-    score += 0
+    score += int(round((float(cal_ok_pct) / 100.0) * 30))  # up to 30
 
 if pd.notna(macro_ok_pct):
-    score += int(round((float(macro_ok_pct) / 100.0) * 25)) # up to 25 points
-else:
-    score += 0
+    score += int(round((float(macro_ok_pct) / 100.0) * 25))  # up to 25
 
 score += 15 if training_ok else 0
 
 if pd.notna(steps_avg):
     steps_points = 10 if float(steps_avg) >= TARGET_STEPS else int(round((float(steps_avg) / TARGET_STEPS) * 10))
     score += max(0, min(10, steps_points))
-else:
-    score += 0
 
 score = int(max(0, min(100, score)))
-label = score_label(score)
+label = _score_label(score)
 
 # ============================================================
-# Display (big + loud)
+# 4) Display
 # ============================================================
 st.markdown(f"### ⚠️ Compliance Score: **{score}/100** — **{label}**")
 
@@ -933,224 +902,31 @@ with c2:
 with c3:
     st.metric(f"Macros ±{int(MACRO_TOL*100)}%", metric_or_dash(macro_ok_pct, "{:.0f}%"))
 with c4:
-    st.metric(f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)", "PASS ✅" if training_ok else "FAIL ❌",
+    st.metric(f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)",
+              "PASS ✅" if training_ok else "FAIL ❌",
               f"{workouts_done}x / {metric_or_dash(minutes_done, '{:.0f}')}m")
 with c5:
-    st.metric(f"Steps ≥{TARGET_STEPS}", metric_or_dash(steps_avg, "{:.0f}"), "PASS ✅" if steps_ok else "LOW ⚠️")
+    st.metric(f"Steps ≥{TARGET_STEPS}",
+              metric_or_dash(steps_avg, "{:.0f}"),
+              "PASS ✅" if steps_ok else "LOW ⚠️")
 
-# Quick "main misses"
+# Main focus next week
 misses = []
-if not logging_ok: misses.append("log at least 5/7 days")
-if pd.notna(cal_ok_pct) and float(cal_ok_pct) < 70: misses.append("tighten calories to within ±10% more often")
-if pd.notna(macro_ok_pct) and float(macro_ok_pct) < 60: misses.append("hit protein/carbs/fat targets within ±10%")
-if not training_ok: misses.append("hit 4 workouts + 200 min")
-if pd.notna(steps_avg) and float(steps_avg) < TARGET_STEPS: misses.append("push steps toward 8k/day")
+if not logging_ok:
+    misses.append(f"log at least {MIN_LOG_DAYS}/7 days")
+if pd.notna(cal_ok_pct) and float(cal_ok_pct) < 70:
+    misses.append("tighten calories to within ±10% more often")
+if pd.notna(macro_ok_pct) and float(macro_ok_pct) < 60:
+    misses.append("hit protein/carbs/fat targets within ±10%")
+if not training_ok:
+    misses.append(f"hit {TARGET_WORKOUTS} workouts + {TARGET_MINUTES} min")
+if pd.notna(steps_avg) and float(steps_avg) < TARGET_STEPS:
+    misses.append("push steps toward 8k/day")
 
 if misses:
     st.caption("Main focus next week: " + " • ".join(misses))
 else:
     st.caption("Main focus next week: keep doing what you’re doing — this is clean.")
-
-# ------------------------------------------------------------
-# YOUR TARGETS
-# ------------------------------------------------------------
-CAL_TOL_PCT = 0.10
-MAC_TOL_PCT = 0.10
-MIN_LOG_DAYS = 6
-MIN_WORKOUTS = 4
-MIN_TRAIN_MIN = 200
-MIN_STEPS_AVG = 8000
-
-# ------------------------------------------------------------
-# Daily totals
-# ------------------------------------------------------------
-def _daily_totals_from_food(df):
-    if df.empty or "date" not in df.columns:
-        return pd.DataFrame()
-    need = ["calories", "protein", "carbs", "fat"]
-    have = [c for c in need if c in df.columns]
-    daily = df.groupby("date", as_index=False)[have].sum(numeric_only=True)
-    return daily
-
-def _targets_from_daily_energy(df):
-    if df.empty or "date" not in df.columns:
-        return pd.DataFrame()
-    out = df[["date"]].copy()
-    out["calorie_target"] = pd.to_numeric(df.get("calorie_target"), errors="coerce")
-    out["protein_target_g"] = pd.to_numeric(df.get("protein_target_g"), errors="coerce")
-    out["carbs_target_g"] = pd.to_numeric(df.get("carbs_target_g"), errors="coerce")
-    out["fat_target_g"] = pd.to_numeric(df.get("fat_target_g"), errors="coerce")
-    return out
-
-def _within_pct(actual, target, tol):
-    if pd.isna(actual) or pd.isna(target) or float(target) == 0:
-        return pd.NA
-    return abs(float(actual) - float(target)) <= abs(float(target)) * tol
-
-# --- FoodLog-based compliance (optional) ---
-if "food_win" in globals() and isinstance(food_win, pd.DataFrame) and not food_win.empty:
-    food_daily = _daily_totals_from_food(food_win)
-else:
-    food_daily = pd.DataFrame()
-# Build daily actuals from FoodLog
-food_daily = _daily_totals_from_food(food_win)
-
-# ✅ Fallback: if FoodLog is missing/empty, use Daily_Energy actuals instead
-if food_daily.empty:
-    de = daily_energy_win_logged.copy()
-
-    # daily_energy schema uses calories + protein_g/carbs_g/fat_g
-    need_cols = ["date", "calories", "protein_g", "carbs_g", "fat_g"]
-    have_cols = [c for c in need_cols if c in de.columns]
-
-    if "date" in have_cols and "calories" in have_cols:
-        de_day = (
-            de.groupby("date", as_index=False)[[c for c in have_cols if c != "date"]]
-            .sum(numeric_only=True)
-        )
-        de_day = de_day.rename(columns={
-            "protein_g": "protein",
-            "carbs_g": "carbs",
-            "fat_g": "fat",
-        })
-        food_daily = de_day
-
-targets_daily = _targets_from_daily_energy(daily_energy_win_logged)
-# --- Guard: make sure both sides have a usable 'date' column before merge ---
-def _ensure_date_col(df: pd.DataFrame, name="date") -> pd.DataFrame:
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return pd.DataFrame(columns=[name])
-    out = df.copy()
-    if name not in out.columns:
-        # common alternatives if something renamed it
-        for alt in ["Date", "day", "Day", "datetime", "date_time"]:
-            if alt in out.columns:
-                out = out.rename(columns={alt: name})
-                break
-    if name in out.columns:
-        out[name] = pd.to_datetime(out[name], errors="coerce").dt.normalize()
-        out = out.dropna(subset=[name])
-    else:
-        # still no date col -> return empty with date col so merge never crashes
-        return pd.DataFrame(columns=[name])
-    return out
-
-food_daily = _ensure_date_col(food_daily, "date")
-targets_daily = _ensure_date_col(targets_daily, "date")
-
-# If food_daily has no other columns, it's effectively missing -> keep merge but it will be targets-only
-daily_cmp = pd.merge(food_daily, targets_daily, on="date", how="outer")
-
-daily_cmp = pd.merge(food_daily, targets_daily, on="date", how="outer")
-
-if not daily_cmp.empty:
-    daily_cmp["cal_ok"] = daily_cmp.apply(
-        lambda r: _within_pct(r.get("calories"), r.get("calorie_target"), CAL_TOL_PCT), axis=1
-    )
-
-    daily_cmp["p_ok"] = daily_cmp.apply(
-        lambda r: _within_pct(r.get("protein"), r.get("protein_target_g"), MAC_TOL_PCT), axis=1
-    )
-    daily_cmp["c_ok"] = daily_cmp.apply(
-        lambda r: _within_pct(r.get("carbs"), r.get("carbs_target_g"), MAC_TOL_PCT), axis=1
-    )
-    daily_cmp["f_ok"] = daily_cmp.apply(
-        lambda r: _within_pct(r.get("fat"), r.get("fat_target_g"), MAC_TOL_PCT), axis=1
-    )
-
-    def macro_day_ok(row):
-        vals = [row.get("p_ok"), row.get("c_ok"), row.get("f_ok")]
-        vals = [v for v in vals if v is True or v is False]
-        if not vals:
-            return pd.NA
-        return all(vals)   # stricter: ALL macros within 10%
-
-    daily_cmp["macros_ok"] = daily_cmp.apply(macro_day_ok, axis=1)
-
-# ------------------------------------------------------------
-# Training compliance
-# ------------------------------------------------------------
-workouts = 0
-minutes_total = 0
-
-if not workout_win.empty and "workout" in workout_win.columns:
-    wk = workout_win.copy()
-    wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str)
-    workouts = wk["session_key"].nunique()
-
-    if "workout_duration" in wk.columns:
-        mins = pd.to_numeric(
-            wk.groupby("session_key")["workout_duration"].max(), errors="coerce"
-        ) / 60.0
-        minutes_total = float(mins.sum()) if mins.notna().any() else 0
-
-training_ok = (workouts >= MIN_WORKOUTS) and (minutes_total >= MIN_TRAIN_MIN)
-
-# ------------------------------------------------------------
-# Logging + steps
-# ------------------------------------------------------------
-days_logged = len(daily_energy_win_logged)
-logging_ok = days_logged >= MIN_LOG_DAYS
-
-steps_avg = pd.NA
-if not daily_energy_win_logged.empty and "steps" in daily_energy_win_logged.columns:
-    steps_avg = pd.to_numeric(daily_energy_win_logged["steps"], errors="coerce").mean()
-
-steps_ok = (pd.notna(steps_avg) and steps_avg >= MIN_STEPS_AVG)
-
-# ------------------------------------------------------------
-# Diet day % compliance
-# ------------------------------------------------------------
-cal_days_ok = int((daily_cmp["cal_ok"] == True).sum()) if "cal_ok" in daily_cmp.columns else 0
-macro_days_ok = int((daily_cmp["macros_ok"] == True).sum()) if "macros_ok" in daily_cmp.columns else 0
-total_days = daily_cmp["date"].nunique() if "date" in daily_cmp.columns else 0
-
-cal_ok_pct = (cal_days_ok / total_days * 100) if total_days else 0
-macro_ok_pct = (macro_days_ok / total_days * 100) if total_days else 0
-
-# ------------------------------------------------------------
-# Score (Matt Mode – aggressive weighting)
-# ------------------------------------------------------------
-score = 0
-score += 20 if logging_ok else 0
-score += int(30 * (cal_ok_pct / 100))
-score += int(25 * (macro_ok_pct / 100))
-score += 15 if training_ok else 0
-score += 5 if steps_ok else 0
-
-score = min(100, score)
-
-st.write("food_daily rows/cols", food_daily.shape, list(food_daily.columns))
-st.write("targets_daily rows/cols", targets_daily.shape, list(targets_daily.columns))
-st.write("daily_cmp rows/cols", daily_cmp.shape, list(daily_cmp.columns))
-st.write(daily_cmp.head(3))
-
-# ------------------------------------------------------------
-# Display (big + bold)
-# ------------------------------------------------------------
-if score >= 90:
-    st.success(f"🔥 **Compliance Score: {score}/100 — Elite Execution**")
-elif score >= 75:
-    st.info(f"💪 **Compliance Score: {score}/100 — Strong Week**")
-else:
-    st.warning(f"⚠️ **Compliance Score: {score}/100 — Tighten Up**")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1:
-    st.metric("Logging", "PASS ✅" if logging_ok else "MISS ❌")
-
-with c2:
-    st.metric("Calories ±10%", f"{cal_ok_pct:.0f}%")
-
-with c3:
-    st.metric("Macros ±10%", f"{macro_ok_pct:.0f}%")
-
-with c4:
-    st.metric("Training (4x / 200m)", "PASS ✅" if training_ok else "MISS ❌")
-
-with c5:
-    st.metric("Steps ≥8000", f"{steps_avg:.0f}" if pd.notna(steps_avg) else "—")
 
 # ============================================================
 # This week so far (Mon -> today)
