@@ -992,6 +992,28 @@ if "food_win" in globals() and isinstance(food_win, pd.DataFrame) and not food_w
     food_daily = _daily_totals_from_food(food_win)
 else:
     food_daily = pd.DataFrame()
+# Build daily actuals from FoodLog
+food_daily = _daily_totals_from_food(food_win)
+
+# ✅ Fallback: if FoodLog is missing/empty, use Daily_Energy actuals instead
+if food_daily.empty:
+    de = daily_energy_win_logged.copy()
+
+    # daily_energy schema uses calories + protein_g/carbs_g/fat_g
+    need_cols = ["date", "calories", "protein_g", "carbs_g", "fat_g"]
+    have_cols = [c for c in need_cols if c in de.columns]
+
+    if "date" in have_cols and "calories" in have_cols:
+        de_day = (
+            de.groupby("date", as_index=False)[[c for c in have_cols if c != "date"]]
+            .sum(numeric_only=True)
+        )
+        de_day = de_day.rename(columns={
+            "protein_g": "protein",
+            "carbs_g": "carbs",
+            "fat_g": "fat",
+        })
+        food_daily = de_day
 
 targets_daily = _targets_from_daily_energy(daily_energy_win_logged)
 # --- Guard: make sure both sides have a usable 'date' column before merge ---
