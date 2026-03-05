@@ -781,7 +781,24 @@ if not train_view.empty:
     combined = combined.merge(train_view, on="date", how="left")
 
 combined = combined.sort_values("date").reset_index(drop=True)
+# ============================================================
+# Phase gating: compute logged days for the SELECTED RANGE
+# ============================================================
+daily_energy_for_phase = load_sheet(WS_DAILY_ENERGY)
+daily_energy_for_phase = normalise_daily_energy_schema(daily_energy_for_phase)
+daily_energy_for_phase = normalise_date_col(daily_energy_for_phase, "date")
+daily_energy_for_phase = to_num(daily_energy_for_phase, [
+    "days_logged_flag",
+    "calories", "expenditure",
+    "protein_g", "carbs_g", "fat_g",
+])
 
+# Use the SAME range you use for phase (selected range)
+phase_win = filter_range(daily_energy_for_phase, start_date, end_date, "date")
+phase_logged = pick_logged_days(phase_win)
+
+days_logged_phase = int(len(phase_logged)) if not phase_logged.empty else 0
+energy_trustworthy = days_logged_phase >= 4
 # ============================================================
 # Suggested phase: Cut vs Recomp vs Lean bulk (selected range)
 # ============================================================
@@ -849,7 +866,10 @@ if pd.notna(avg_bal) and energy_trustworthy:
     else:
         reason.append("Energy balance looks close to maintenance (±150 kcal/day).")
 else:
-    reason.append("Energy balance not reliable due to low logging.")
+    if not energy_trustworthy:
+        reason.append(f"Energy balance not reliable ({days_logged_phase}/7 days logged).")
+    else:
+        reason.append("Energy balance unavailable.")
 
 # Present result
 badge = "✅ RECOMP" if phase == "Recomp" else ("🔥 LEAN BULK" if phase == "Lean bulk" else "✂️ CUT")
