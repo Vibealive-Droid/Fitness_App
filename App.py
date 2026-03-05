@@ -1016,66 +1016,6 @@ score = int(max(0, min(100, score)))
 label = score_label(score)
 
 # ============================================================
-# 4) Display
-# ============================================================
-st.markdown(f"### ⚠️ Compliance Score: **{score}/100** — **{label}**")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    st.metric("Logging", "PASS ✅" if logging_ok else "FAIL ❌", f"{days_logged}/7 days")
-with c2:
-    st.metric(f"Calories ±{int(CAL_TOL*100)}%", metric_or_dash(cal_ok_pct, "{:.0f}%"))
-with c3:
-    st.metric(f"Macros ±{int(MACRO_TOL*100)}%", metric_or_dash(macro_ok_pct, "{:.0f}%"))
-with c4:
-    st.metric(
-        f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)",
-        "PASS ✅" if training_ok else "FAIL ❌",
-        f"{workouts_done}x / {metric_or_dash(minutes_done, '{:.0f}')}m"
-    )
-with c5:
-    st.metric(
-        f"Steps ≥{TARGET_STEPS}",
-        metric_or_dash(steps_avg, "{:.0f}"),
-        "PASS ✅" if steps_ok else "LOW ⚠️"
-    )
-
-# Main focus next week
-misses = []
-if not logging_ok:
-    misses.append(f"log at least {MIN_LOG_DAYS}/7 days")
-if pd.notna(cal_ok_pct) and float(cal_ok_pct) < 70:
-    misses.append("tighten calories to within ±10% more often")
-if pd.notna(macro_ok_pct) and float(macro_ok_pct) < 60:
-    misses.append("hit protein/carbs/fat targets within ±10%")
-if not training_ok:
-    misses.append(f"hit {TARGET_WORKOUTS} workouts + {TARGET_MINUTES} min")
-if pd.notna(steps_avg) and float(steps_avg) < TARGET_STEPS:
-    misses.append("push steps toward 8k/day")
-
-if misses:
-    st.caption("Main focus next week: " + " • ".join(misses))
-else:
-    st.caption("Main focus next week: keep doing what you’re doing — this is clean.")
-# -------------------------
-# Small helpers
-# -------------------------
-def _within_tol(actual, target, tol):
-    if pd.isna(actual) or pd.isna(target) or float(target) == 0:
-        return False
-    return abs(float(actual) - float(target)) <= (abs(float(target)) * float(tol))
-
-def _safe_mean(series):
-    s = pd.to_numeric(series, errors="coerce")
-    return s.mean() if s.notna().any() else pd.NA
-
-def _score_label(score: int) -> str:
-    if score >= 85: return "Locked In 🔥"
-    if score >= 70: return "Solid ✅"
-    if score >= 55: return "Okay — Tighten Up"
-    return "Tighten Up ⚠️"
-
-# ============================================================
 # 1) DAILY ENERGY (logging, calories, macros, steps)
 # ============================================================
 daily_energy = load_sheet(WS_DAILY_ENERGY)
@@ -1243,13 +1183,17 @@ with c2:
 with c3:
     st.metric(f"Macros ±{int(MACRO_TOL*100)}%", metric_or_dash(macro_ok_pct, "{:.0f}%"))
 with c4:
-    st.metric(f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)",
-              "PASS ✅" if training_ok else "FAIL ❌",
-              f"{workouts_done}x / {metric_or_dash(minutes_done, '{:.0f}')}m")
+    st.metric(
+        f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)",
+        "PASS ✅" if training_ok else "FAIL ❌",
+        f"{workouts_done}x / {metric_or_dash(minutes_done, '{:.0f}')}m"
+    )
 with c5:
-    st.metric(f"Steps ≥{TARGET_STEPS}",
-              metric_or_dash(steps_avg, "{:.0f}"),
-              "PASS ✅" if steps_ok else "LOW ⚠️")
+    st.metric(
+        f"Steps ≥{TARGET_STEPS}",
+        metric_or_dash(steps_avg, "{:.0f}"),
+        "PASS ✅" if steps_ok else "LOW ⚠️"
+    )
 
 # Main focus next week
 misses = []
@@ -1268,7 +1212,23 @@ if misses:
     st.caption("Main focus next week: " + " • ".join(misses))
 else:
     st.caption("Main focus next week: keep doing what you’re doing — this is clean.")
+# -------------------------
+# Small helpers
+# -------------------------
+def _within_tol(actual, target, tol):
+    if pd.isna(actual) or pd.isna(target) or float(target) == 0:
+        return False
+    return abs(float(actual) - float(target)) <= (abs(float(target)) * float(tol))
 
+def _safe_mean(series):
+    s = pd.to_numeric(series, errors="coerce")
+    return s.mean() if s.notna().any() else pd.NA
+
+def _score_label(score: int) -> str:
+    if score >= 85: return "Locked In 🔥"
+    if score >= 70: return "Solid ✅"
+    if score >= 55: return "Okay — Tighten Up"
+    return "Tighten Up ⚠️"
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
