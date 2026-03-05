@@ -1106,7 +1106,7 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True,
-))
+)
 
         # quick “next targets” nudge (simple + motivating)
         # Aim: SWR 1.40+ (Strong V zone)
