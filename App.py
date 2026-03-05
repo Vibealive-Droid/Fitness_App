@@ -902,7 +902,7 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined["volume_per_minute"] = vol / minutes
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 # ============================================================
-# ✅ Compliance (Mon -> Sun) — Matt Standard (single source of truth)
+# ✅ Compliance (Mon -> Sun) — Matt Standard (uses helpers block)
 # ============================================================
 st.subheader("✅ Compliance (Mon → Sun) — Matt Standard")
 
@@ -914,15 +914,149 @@ CAL_TOL = 0.10
 MACRO_TOL = 0.10
 MIN_LOG_DAYS = 6  # Matt standard: 6/7 logged days
 
-today_ts = pd.Timestamp.today().normalize()
-this_monday = monday_of(today_ts)
-
-# Last full week: Mon -> Sun
-start_monday = this_monday - pd.Timedelta(days=7)
-end_sunday = start_monday + pd.Timedelta(days=6)
+# Use Montreal-local date to avoid server-time weirdness
+today_ts = now_local_date()
+start_monday, end_sunday = week_window_last_full(today_ts)
 
 st.caption(f"Compliance window: **{start_monday.date()} → {end_sunday.date()}** (Mon→Sun)")
 
+# ============================================================
+# 1) DAILY ENERGY (logging, calories, macros, steps)
+# ============================================================
+daily_energy = load_sheet(WS_DAILY_ENERGY)
+daily_energy = normalise_daily_energy_schema(daily_energy)
+daily_energy = normalise_date_col(daily_energy, "date")
+daily_energy = to_num(daily_energy, [
+    "days_logged_flag",
+    "calories", "expenditure", "calorie_target",
+    "protein_g", "carbs_g", "fat_g",
+    "protein_target_g", "carbs_target_g", "fat_target_g",
+    "protein_adherence",
+    "steps"
+])
+
+daily_energy_win = filter_range(daily_energy, start_monday, end_sunday, "date")
+daily_energy_win = ensure_df(daily_energy_win)
+
+# ✅ Key: logged days collapsed to ONE row per date
+daily_energy_logged = pick_logged_days(daily_energy_win)
+
+days_logged = count_logged_days(daily_energy_logged)
+logging_ok = days_logged >= MIN_LOG_DAYS
+
+# Calories/macros compliance %
+cal_ok_pct = compute_calorie_ok_pct(daily_energy_logged, CAL_TOL)
+macro_ok_pct = compute_macros_ok_pct(daily_energy_logged, MACRO_TOL)
+
+# Steps
+steps_avg = pd.NA
+steps_ok = False
+if not daily_energy_logged.empty and "steps" in daily_energy_logged.columns:
+    steps_avg = safe_mean(daily_energy_logged["steps"])
+    steps_ok = (pd.notna(steps_avg) and float(steps_avg) >= TARGET_STEPS)
+
+# ============================================================
+# 2) WORKOUT LOG (workouts + minutes)
+# ============================================================
+workout_log = load_sheet(WS_WORKOUT_LOG)
+workout_log = normalise_workout_log_schema(workout_log)
+workout_log = normalise_date_col(workout_log, "date")
+workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
+
+workout_win = filter_range(workout_log, start_monday, end_sunday, "date")
+workout_win = ensure_df(workout_win)
+
+workouts_done = 0
+minutes_done = pd.NA
+
+if not workout_win.empty and "date" in workout_win.columns:
+    wk = workout_win.copy()
+
+    # session_key prevents "sets counted as workouts"
+    if "workout" in wk.columns:
+        wk["session_key"] = (
+            wk["date"].dt.date.astype(str)
+            + "|"
+            + wk["workout"].astype(str).str.strip().str.lower()
+        )
+    else:
+        wk["session_key"] = wk["date"].dt.date.astype(str)
+
+    workouts_done = int(wk["session_key"].nunique())
+
+    # duration: max per session (MacroFactor repeats per set) then sum
+    if "workout_duration" in wk.columns:
+        mins = safe_num(wk.groupby("session_key")["workout_duration"].max()) / 60.0
+        minutes_done = float(mins.sum()) if mins.notna().any() else pd.NA
+
+training_ok = (
+    workouts_done >= TARGET_WORKOUTS
+    and (pd.notna(minutes_done) and float(minutes_done) >= TARGET_MINUTES)
+)
+
+# ============================================================
+# 3) Score
+# ============================================================
+score = 0
+score += 20 if logging_ok else 0
+
+if pd.notna(cal_ok_pct):
+    score += int(round((float(cal_ok_pct) / 100.0) * 30))  # up to 30
+
+if pd.notna(macro_ok_pct):
+    score += int(round((float(macro_ok_pct) / 100.0) * 25))  # up to 25
+
+score += 15 if training_ok else 0
+
+if pd.notna(steps_avg):
+    steps_points = 10 if float(steps_avg) >= TARGET_STEPS else int(round((float(steps_avg) / TARGET_STEPS) * 10))
+    score += max(0, min(10, steps_points))
+
+score = int(max(0, min(100, score)))
+label = score_label(score)
+
+# ============================================================
+# 4) Display
+# ============================================================
+st.markdown(f"### ⚠️ Compliance Score: **{score}/100** — **{label}**")
+
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1:
+    st.metric("Logging", "PASS ✅" if logging_ok else "FAIL ❌", f"{days_logged}/7 days")
+with c2:
+    st.metric(f"Calories ±{int(CAL_TOL*100)}%", metric_or_dash(cal_ok_pct, "{:.0f}%"))
+with c3:
+    st.metric(f"Macros ±{int(MACRO_TOL*100)}%", metric_or_dash(macro_ok_pct, "{:.0f}%"))
+with c4:
+    st.metric(
+        f"Training ({TARGET_WORKOUTS}x / {TARGET_MINUTES}m)",
+        "PASS ✅" if training_ok else "FAIL ❌",
+        f"{workouts_done}x / {metric_or_dash(minutes_done, '{:.0f}')}m"
+    )
+with c5:
+    st.metric(
+        f"Steps ≥{TARGET_STEPS}",
+        metric_or_dash(steps_avg, "{:.0f}"),
+        "PASS ✅" if steps_ok else "LOW ⚠️"
+    )
+
+# Main focus next week
+misses = []
+if not logging_ok:
+    misses.append(f"log at least {MIN_LOG_DAYS}/7 days")
+if pd.notna(cal_ok_pct) and float(cal_ok_pct) < 70:
+    misses.append("tighten calories to within ±10% more often")
+if pd.notna(macro_ok_pct) and float(macro_ok_pct) < 60:
+    misses.append("hit protein/carbs/fat targets within ±10%")
+if not training_ok:
+    misses.append(f"hit {TARGET_WORKOUTS} workouts + {TARGET_MINUTES} min")
+if pd.notna(steps_avg) and float(steps_avg) < TARGET_STEPS:
+    misses.append("push steps toward 8k/day")
+
+if misses:
+    st.caption("Main focus next week: " + " • ".join(misses))
+else:
+    st.caption("Main focus next week: keep doing what you’re doing — this is clean.")
 # -------------------------
 # Small helpers
 # -------------------------
