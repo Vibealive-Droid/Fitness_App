@@ -1098,25 +1098,6 @@ if not daily_energy_logged.empty:
             proxy_ok = adh.notna() & adh.ge(1.0 - MACRO_TOL)
             macro_ok_pct = (proxy_ok.sum() / adh.notna().sum()) * 100 if adh.notna().any() else pd.NA
 
-if not daily_energy_logged.empty:
-    de = daily_energy_logged.copy()
-
-    # Macros compliance: % logged days where ALL macros are within tolerance
-    macro_flags = []
-    needed = ["protein_g", "carbs_g", "fat_g", "protein_target_g", "carbs_target_g", "fat_target_g"]
-    has_macros = all(c in de.columns for c in needed)
-    if has_macros:
-        for _, r in de.iterrows():
-            p_ok = _within_tol(pd.to_numeric(r.get("protein_g"), errors="coerce"),
-                               pd.to_numeric(r.get("protein_target_g"), errors="coerce"), MACRO_TOL)
-            c_ok = _within_tol(pd.to_numeric(r.get("carbs_g"), errors="coerce"),
-                               pd.to_numeric(r.get("carbs_target_g"), errors="coerce"), MACRO_TOL)
-            f_ok = _within_tol(pd.to_numeric(r.get("fat_g"), errors="coerce"),
-                               pd.to_numeric(r.get("fat_target_g"), errors="coerce"), MACRO_TOL)
-            macro_flags.append(bool(p_ok and c_ok and f_ok))
-        if len(macro_flags):
-            macro_ok_pct = (sum(macro_flags) / len(macro_flags)) * 100.0
-
 # ============================================================
 # 2) WORKOUT LOG (workouts + minutes)
 # ============================================================
