@@ -1314,55 +1314,133 @@ with left:
 # ------------------------------------------------------------
 
 def make_v_avatar_svg(shoulders, waist, hips, swr_val):
-
-    W, H = 260, 360
-    base_swr = 1.22
-
-    if pd.isna(swr_val):
-        swr_val = base_swr
-
-    exaggeration = 1.18
-
-    widen = math.sqrt(max(0.7, min(1.8, (swr_val / base_swr)))) * exaggeration
-    tighten = math.sqrt(max(0.7, min(1.8, (base_swr / swr_val)))) * exaggeration
-
-    shoulder_w = max(90, min(190, (shoulders * 2.1) * widen))
-    hip_w = max(80, min(170, (hips * 2.0) * (0.90 + 0.10*widen)))
-    waist_w = max(55, min(150, (waist * 1.9) * (0.85 * tighten)))
-
+    # Canvas
+    W, H = 320, 420
     cx = W / 2
 
-    y_head = 55
-    y_shoulder = 95
-    y_waist = 190
-    y_hip = 245
-    y_leg = 330
+    # --- Stable normalisation
+    base_swr = 1.22
+    if swr_val is None or pd.isna(swr_val):
+        swr_val = base_swr
+    swr_val = float(swr_val)
 
+    exaggeration = 1.15
+    widen = math.sqrt(max(0.75, min(1.75, (swr_val / base_swr)))) * exaggeration
+    tighten = math.sqrt(max(0.75, min(1.75, (base_swr / swr_val)))) * exaggeration
+
+    # --- Convert circumferences to visual widths (cartoon proxy)
+    shoulder_w = max(120, min(240, (float(shoulders) * 2.0) * widen))
+    hip_w      = max(105, min(210, (float(hips) * 1.9) * (0.92 + 0.08*widen)))
+    waist_w    = max(78,  min(190, (float(waist) * 1.8) * (0.86 * tighten)))
+
+    # Half-widths
     sx = shoulder_w / 2
-    wx = waist_w / 2
     hx = hip_w / 2
+    wx = waist_w / 2
 
-    path = f"""
-    M {cx - sx},{y_shoulder}
-    Q {cx},{y_shoulder - 18} {cx + sx},{y_shoulder}
-    L {cx + wx},{y_waist}
-    Q {cx},{y_waist + 10} {cx - wx},{y_waist}
-    L {cx - hx},{y_hip}
-    Q {cx},{y_hip + 14} {cx + hx},{y_hip}
-    L {cx + hx*0.7},{y_leg}
-    Q {cx},{y_leg + 10} {cx - hx*0.7},{y_leg}
+    # Y coords
+    y_head = 64
+    y_neck_top = 86
+    y_shoulder = 118
+    y_chest = 152
+    y_waist = 220
+    y_hip = 272
+    y_crotch = 302
+    y_knee = 360
+    y_ankle = 400
+
+    # Arms (simple droop)
+    arm_out = sx * 0.92
+    arm_in = sx * 0.62
+    y_arm_top = y_shoulder + 8
+    y_arm_mid = y_waist - 18
+
+    # Legs
+    leg_gap = max(14, min(26, wx * 0.32))     # space between legs at crotch
+    thigh_w = max(34, min(70, hx * 0.55))
+    calf_w  = max(26, min(58, hx * 0.45))
+    ankle_w = max(18, min(42, hx * 0.34))
+
+    # Torso outline (rounded delts + clear waist pinch)
+    torso_path = f"""
+    M {cx - sx:.1f},{y_shoulder:.1f}
+    Q {cx:.1f},{y_shoulder - 34:.1f} {cx + sx:.1f},{y_shoulder:.1f}
+
+    Q {cx + sx*0.90:.1f},{y_chest:.1f} {cx + wx:.1f},{y_waist:.1f}
+    Q {cx:.1f},{y_waist + 18:.1f} {cx - wx:.1f},{y_waist:.1f}
+    Q {cx - sx*0.90:.1f},{y_chest:.1f} {cx - sx:.1f},{y_shoulder:.1f}
+
+    M {cx - wx:.1f},{y_waist:.1f}
+    Q {cx - hx*0.95:.1f},{y_hip:.1f} {cx - hx:.1f},{y_hip:.1f}
+    Q {cx:.1f},{y_hip + 18:.1f} {cx + hx:.1f},{y_hip:.1f}
+    Q {cx + hx*0.95:.1f},{y_hip:.1f} {cx + wx:.1f},{y_waist:.1f}
     Z
     """
 
-    svg = f"""
-    <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
-        <rect width="100%" height="100%" fill="transparent"/>
-        <circle cx="{cx}" cy="{y_head}" r="26" fill="#2b2b2b" opacity="0.85"/>
-        <rect x="{cx-12}" y="{y_head+26}" width="24" height="20" rx="10" fill="#2b2b2b" opacity="0.85"/>
-        <path d="{path}" fill="#2b2b2b" opacity="0.9"/>
-    </svg>
+    # Arms (two simple tapered shapes)
+    left_arm = f"""
+    M {cx - arm_in:.1f},{y_arm_top:.1f}
+    Q {cx - arm_out:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx - arm_in*0.92:.1f},{y_arm_mid:.1f}
+    Q {cx - arm_in*0.75:.1f},{y_arm_mid + 18:.1f} {cx - arm_in*0.60:.1f},{y_arm_mid:.1f}
+    Q {cx - arm_out*0.72:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx - arm_in:.1f},{y_arm_top:.1f}
+    Z
+    """
+    right_arm = f"""
+    M {cx + arm_in:.1f},{y_arm_top:.1f}
+    Q {cx + arm_out:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx + arm_in*0.92:.1f},{y_arm_mid:.1f}
+    Q {cx + arm_in*0.75:.1f},{y_arm_mid + 18:.1f} {cx + arm_in*0.60:.1f},{y_arm_mid:.1f}
+    Q {cx + arm_out*0.72:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx + arm_in:.1f},{y_arm_top:.1f}
+    Z
     """
 
+    # Legs (two shapes so it stops looking like one pillar)
+    left_leg = f"""
+    M {cx - leg_gap/2:.1f},{y_crotch:.1f}
+    L {cx - leg_gap/2 - thigh_w:.1f},{y_knee:.1f}
+    Q {cx - leg_gap/2 - calf_w:.1f},{y_ankle - 10:.1f} {cx - leg_gap/2 - ankle_w:.1f},{y_ankle:.1f}
+    Q {cx - leg_gap/2:.1f},{y_ankle + 4:.1f} {cx - leg_gap/2 + ankle_w:.1f},{y_ankle:.1f}
+    Q {cx - leg_gap/2 + calf_w:.1f},{y_ankle - 10:.1f} {cx - leg_gap/2 + thigh_w*0.25:.1f},{y_knee:.1f}
+    Z
+    """
+    right_leg = f"""
+    M {cx + leg_gap/2:.1f},{y_crotch:.1f}
+    L {cx + leg_gap/2 + thigh_w:.1f},{y_knee:.1f}
+    Q {cx + leg_gap/2 + calf_w:.1f},{y_ankle - 10:.1f} {cx + leg_gap/2 + ankle_w:.1f},{y_ankle:.1f}
+    Q {cx + leg_gap/2:.1f},{y_ankle + 4:.1f} {cx + leg_gap/2 - ankle_w:.1f},{y_ankle:.1f}
+    Q {cx + leg_gap/2 - calf_w:.1f},{y_ankle - 10:.1f} {cx + leg_gap/2 - thigh_w*0.25:.1f},{y_knee:.1f}
+    Z
+    """
+
+    # Neck width roughly from shoulder/waist relationship (small visual detail)
+    neck_w = max(18, min(30, sx * 0.18))
+
+    svg = f"""
+    <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
+      <rect width="100%" height="100%" fill="transparent"/>
+
+      <!-- head -->
+      <circle cx="{cx:.1f}" cy="{y_head:.1f}" r="28" fill="#2b2b2b" opacity="0.88"/>
+
+      <!-- neck -->
+      <rect x="{cx - neck_w/2:.1f}" y="{y_neck_top:.1f}" width="{neck_w:.1f}" height="26" rx="12"
+            fill="#2b2b2b" opacity="0.88"/>
+
+      <!-- arms (behind torso) -->
+      <path d="{left_arm}"  fill="#2b2b2b" opacity="0.72"/>
+      <path d="{right_arm}" fill="#2b2b2b" opacity="0.72"/>
+
+      <!-- torso -->
+      <path d="{torso_path}" fill="#2b2b2b" opacity="0.90"/>
+
+      <!-- legs -->
+      <path d="{left_leg}"  fill="#2b2b2b" opacity="0.85"/>
+      <path d="{right_leg}" fill="#2b2b2b" opacity="0.85"/>
+
+      <!-- waist hint -->
+      <path d="M {cx-wx:.1f},{y_waist:.1f} Q {cx:.1f},{y_waist+10:.1f} {cx+wx:.1f},{y_waist:.1f}"
+            fill="none" stroke="#ffffff" stroke-width="2" opacity="0.18"/>
+    </svg>
+    """
     return svg
 
 with right:
