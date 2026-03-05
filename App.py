@@ -402,7 +402,16 @@ def date_for_table(df: pd.DataFrame, col="date") -> pd.DataFrame:
 
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
-
+    
+def score_label(score: int) -> str:
+    if score >= 85:
+        return "Locked In 🔥"
+    if score >= 70:
+        return "Solid ✅"
+    if score >= 55:
+        return "Okay — Tighten Up"
+    return "Tighten Up ⚠️"
+    
 def metric_or_dash(x, fmt="{:.0f}"):
     if x is None or pd.isna(x):
         return "—"
@@ -1149,7 +1158,7 @@ if pd.notna(steps_avg):
     score += max(0, min(10, steps_points))
 
 score = int(max(0, min(100, score)))
-label = _score_label(score)
+label = score_label(score)
 
 # ============================================================
 # 4) Display
