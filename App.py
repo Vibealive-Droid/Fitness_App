@@ -793,15 +793,18 @@ daily_energy_for_phase = to_num(daily_energy_for_phase, [
     "protein_g", "carbs_g", "fat_g",
 ])
 
-# Use the SAME range you use for phase (selected range)
-phase_win = filter_range(daily_energy_for_phase, start_date, end_date, "date")
-phase_logged = pick_logged_days(phase_win)
+# --- Logging confidence for phase suggestion (local to this section)
+days_logged_phase = 0
+if "days_logged" in combined.columns:
+    # Weekly_Energy typically has days_logged per week row
+    s = pd.to_numeric(combined["days_logged"], errors="coerce").dropna()
+    days_logged_phase = int(round(s.mean())) if not s.empty else 0
 
-days_logged_phase = int(len(phase_logged)) if not phase_logged.empty else 0
 energy_trustworthy = days_logged_phase >= 4
 # ============================================================
 # Suggested phase: Cut vs Recomp vs Lean bulk (selected range)
 # ============================================================
+
 
 energy_trustworthy = days_logged >= 4
 
