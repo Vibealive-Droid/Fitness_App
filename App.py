@@ -1247,156 +1247,157 @@ left, right = st.columns([1.1, 1.4])
 
 with left:
     st.subheader("Measurements (inches)")
-    height_in = st.number_input("Height (in)", min_value=50.0, max_value=90.0, value=DEFAULT_HEIGHT_IN, step=0.5)
-    weight_lb = st.number_input("Weight (lb)", min_value=120.0, max_value=350.0, value=float(DEFAULT_WEIGHT_LB), step=0.5)
 
-    shoulders_in = st.number_input("Shoulders", min_value=30.0, max_value=70.0, value=float(DEFAULT_SHOULDERS), step=0.05)
-    waist_in = st.number_input("Waist (navel)", min_value=20.0, max_value=70.0, value=float(DEFAULT_WAIST), step=0.05)
-    hips_in = st.number_input("Hips", min_value=25.0, max_value=70.0, value=float(DEFAULT_HIPS), step=0.05)
+    height_in = st.number_input("Height (in)", 50.0, 90.0, DEFAULT_HEIGHT_IN, 0.5)
+    weight_lb = st.number_input("Weight (lb)", 120.0, 350.0, float(DEFAULT_WEIGHT_LB), 0.5)
 
-    st.caption("Tip: keep tape tension + timing consistent. Update these monthly for best signal.")
+    shoulders_in = st.number_input("Shoulders", 30.0, 70.0, float(DEFAULT_SHOULDERS), 0.05)
+    waist_in = st.number_input("Waist (navel)", 20.0, 70.0, float(DEFAULT_WAIST), 0.05)
+    hips_in = st.number_input("Hips", 25.0, 70.0, float(DEFAULT_HIPS), 0.05)
+
+    st.caption("Tip: keep tape tension + timing consistent. Update monthly for best signal.")
 
 def _safe_ratio(a, b):
     try:
-        a = float(a); b = float(b)
-        if b == 0: return pd.NA
+        a = float(a)
+        b = float(b)
+        if b == 0:
+            return pd.NA
         return a / b
-    except Exception:
+    except:
         return pd.NA
 
-swr = _safe_ratio(shoulders_in, waist_in)   # Shoulder/Waist
-shr = _safe_ratio(shoulders_in, hips_in)    # Shoulder/Hip
-whtr = _safe_ratio(waist_in, height_in)     # Waist/Height
+swr = _safe_ratio(shoulders_in, waist_in)
+shr = _safe_ratio(shoulders_in, hips_in)
+whtr = _safe_ratio(waist_in, height_in)
 
-def v_state(swr_val):
-    if pd.isna(swr_val):
+def v_state(val):
+    if pd.isna(val):
         return "—"
-    if swr_val < 1.25: return "Block"
-    if swr_val < 1.35: return "Athletic"
-    if swr_val < 1.45: return "Strong V"
-    if swr_val < 1.55: return "Wide"
-    return "Savage"
+    if val < 1.25:
+        return "Block"
+    elif val < 1.35:
+        return "Athletic"
+    elif val < 1.45:
+        return "Strong V"
+    elif val < 1.55:
+        return "Wide"
+    else:
+        return "Savage"
 
 state = v_state(swr)
 
 with left:
     st.subheader("Ratios")
-    r1, r2, r3 = st.columns(3)
-    with r1:
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
         st.metric("Shoulder / Waist", "—" if pd.isna(swr) else f"{swr:.2f}", state)
-    with r2:
+
+    with c2:
         st.metric("Shoulder / Hip", "—" if pd.isna(shr) else f"{shr:.2f}")
-    with r3:
+
+    with c3:
         st.metric("Waist / Height", "—" if pd.isna(whtr) else f"{whtr:.3f}")
 
-    # quick guidance (kept simple)
     if pd.notna(whtr):
         if whtr <= 0.45:
             st.success("Waist/Height is in a very lean range.")
         elif whtr <= 0.50:
             st.info("Waist/Height is in a solid general range.")
         else:
-            st.warning("Waist/Height suggests your midsection is currently the main lever for the taper.")
+            st.warning("Midsection is currently the main lever for your taper.")
 
-# --- Exaggerated avatar generator (SVG)
+# ------------------------------------------------------------
+# SVG Avatar Generator
+# ------------------------------------------------------------
+
 def make_v_avatar_svg(shoulders, waist, hips, swr_val):
-    # Canvas
+
     W, H = 260, 360
-
-    # Normalise widths to a cartoony but stable scale
-    # Anchor SWR=1.22 as baseline (your current), then exaggerate improvements.
     base_swr = 1.22
-    swr_val = float(swr_val) if (swr_val is not None and not pd.isna(swr_val)) else base_swr
 
-    # Exaggeration (B mode): make improvements "look" bigger than they are
+    if pd.isna(swr_val):
+        swr_val = base_swr
+
     exaggeration = 1.18
 
-    # Width factors (sqrt keeps it stable)
     widen = math.sqrt(max(0.7, min(1.8, (swr_val / base_swr)))) * exaggeration
     tighten = math.sqrt(max(0.7, min(1.8, (base_swr / swr_val)))) * exaggeration
 
-    # Convert circumferences into relative widths (not physically exact—visual proxy)
-    # Shoulder and hips are driven more by their measurements; waist gets extra "tighten" effect.
     shoulder_w = max(90, min(190, (shoulders * 2.1) * widen))
-    hip_w      = max(80, min(170, (hips * 2.0) * (0.90 + 0.10*widen)))
-    waist_w    = max(55, min(150, (waist * 1.9) * (0.85 * tighten)))
+    hip_w = max(80, min(170, (hips * 2.0) * (0.90 + 0.10*widen)))
+    waist_w = max(55, min(150, (waist * 1.9) * (0.85 * tighten)))
 
     cx = W / 2
 
-    # Y coordinates
     y_head = 55
     y_shoulder = 95
     y_waist = 190
     y_hip = 245
     y_leg = 330
 
-    # Points for torso polygon (simple stylised outline)
     sx = shoulder_w / 2
     wx = waist_w / 2
     hx = hip_w / 2
 
-    # Slight rounded shoulders and hips using a path
     path = f"""
-    M {cx - sx:.1f},{y_shoulder:.1f}
-    Q {cx:.1f},{y_shoulder - 18:.1f} {cx + sx:.1f},{y_shoulder:.1f}
-    L {cx + wx:.1f},{y_waist:.1f}
-    Q {cx:.1f},{y_waist + 10:.1f} {cx - wx:.1f},{y_waist:.1f}
-    L {cx - hx:.1f},{y_hip:.1f}
-    Q {cx:.1f},{y_hip + 14:.1f} {cx + hx:.1f},{y_hip:.1f}
-    L {cx + hx*0.70:.1f},{y_leg:.1f}
-    Q {cx:.1f},{y_leg + 10:.1f} {cx - hx*0.70:.1f},{y_leg:.1f}
+    M {cx - sx},{y_shoulder}
+    Q {cx},{y_shoulder - 18} {cx + sx},{y_shoulder}
+    L {cx + wx},{y_waist}
+    Q {cx},{y_waist + 10} {cx - wx},{y_waist}
+    L {cx - hx},{y_hip}
+    Q {cx},{y_hip + 14} {cx + hx},{y_hip}
+    L {cx + hx*0.7},{y_leg}
+    Q {cx},{y_leg + 10} {cx - hx*0.7},{y_leg}
     Z
     """
 
-    # Colour is kept neutral; no style assumptions
     svg = f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
-      <rect x="0" y="0" width="{W}" height="{H}" fill="transparent"/>
-      <!-- head -->
-      <circle cx="{cx}" cy="{y_head}" r="26" fill="#2b2b2b" opacity="0.85"/>
-      <!-- neck -->
-      <rect x="{cx-12}" y="{y_head+26}" width="24" height="20" rx="10" fill="#2b2b2b" opacity="0.85"/>
-      <!-- torso -->
-      <path d="{path}" fill="#2b2b2b" opacity="0.90"/>
-      <!-- tiny waist highlight line -->
-      <path d="M {cx-wx:.1f},{y_waist:.1f} Q {cx:.1f},{y_waist+8:.1f} {cx+wx:.1f},{y_waist:.1f}"
-            fill="none" stroke="#ffffff" stroke-width="2" opacity="0.25"/>
+        <rect width="100%" height="100%" fill="transparent"/>
+        <circle cx="{cx}" cy="{y_head}" r="26" fill="#2b2b2b" opacity="0.85"/>
+        <rect x="{cx-12}" y="{y_head+26}" width="24" height="20" rx="10" fill="#2b2b2b" opacity="0.85"/>
+        <path d="{path}" fill="#2b2b2b" opacity="0.9"/>
     </svg>
     """
+
     return svg
 
 with right:
     st.subheader("Avatar (exaggerated V-taper)")
+
     if pd.isna(swr):
-        st.info("Enter shoulders + waist to render the avatar.")
+        st.info("Enter measurements to render avatar.")
     else:
         svg = make_v_avatar_svg(shoulders_in, waist_in, hips_in, swr)
-        b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
-st.markdown(
-    f"""
-    <div style="display:flex; justify-content:center;">
-      <img src="data:image/svg+xml;base64,{b64}" style="width:100%; max-width:520px;" />
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
-        # quick “next targets” nudge (simple + motivating)
-        # Aim: SWR 1.40+ (Strong V zone)
+        b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:center;">
+                <img src="data:image/svg+xml;base64,{b64}" 
+                     style="width:100%; max-width:420px;" />
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         target_swr = 1.40
+
         if swr < target_swr:
-            # If shoulders stayed the same, what waist would hit 1.40?
             waist_needed = shoulders_in / target_swr
-            # If waist stayed the same, what shoulders would hit 1.40?
             shoulders_needed = waist_in * target_swr
 
             st.caption(
-                f"To hit **Strong V (≥{target_swr:.2f})**:\n"
-                f"- If shoulders stayed **{shoulders_in:.2f}\"**, waist would need ≈ **{waist_needed:.1f}\"**\n"
-                f"- If waist stayed **{waist_in:.2f}\"**, shoulders would need ≈ **{shoulders_needed:.1f}\"**"
+                f"To hit Strong V (≥{target_swr:.2f}): "
+                f"If shoulders stay {shoulders_in:.2f}\", waist ≈ {waist_needed:.1f}\" | "
+                f"If waist stays {waist_in:.2f}\", shoulders ≈ {shoulders_needed:.1f}\""
             )
         else:
-            st.success("You’re in Strong V territory or better — keep stacking shoulder/back and guarding waist drift.")
+            st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
 # Main focus next week
 misses = []
 if not logging_ok:
