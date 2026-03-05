@@ -5,6 +5,7 @@ import gspread
 import random
 import time
 import math
+import base64
 from io import BytesIO
 from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
@@ -1095,7 +1096,17 @@ with right:
         st.info("Enter shoulders + waist to render the avatar.")
     else:
         svg = make_v_avatar_svg(shoulders_in, waist_in, hips_in, swr)
-        st.image(BytesIO(svg.encode("utf-8")), use_container_width=True)
+        import base64
+
+b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+st.markdown(
+    f"""
+    <div style="display:flex; justify-content:center;">
+      <img src="data:image/svg+xml;base64,{b64}" style="width:100%; max-width:520px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+))
 
         # quick “next targets” nudge (simple + motivating)
         # Aim: SWR 1.40+ (Strong V zone)
