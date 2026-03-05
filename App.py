@@ -1351,7 +1351,7 @@ def make_v_avatar_svg(shoulders, waist, hips, swr_val):
     # Colour is kept neutral; no style assumptions
     svg = f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
-      <rect x="0" y="0" width="{W}" height="{H}" fill="white"/>
+      <rect x="0" y="0" width="{W}" height="{H}" fill="transparent"/>
       <!-- head -->
       <circle cx="{cx}" cy="{y_head}" r="26" fill="#2b2b2b" opacity="0.85"/>
       <!-- neck -->
@@ -1371,7 +1371,15 @@ with right:
         st.info("Enter shoulders + waist to render the avatar.")
     else:
         svg = make_v_avatar_svg(shoulders_in, waist_in, hips_in, swr)
-        st.image(BytesIO(svg.encode("utf-8")), use_container_width=True)
+        b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+st.markdown(
+    f"""
+    <div style="display:flex; justify-content:center;">
+      <img src="data:image/svg+xml;base64,{b64}" style="width:100%; max-width:520px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
         # quick “next targets” nudge (simple + motivating)
         # Aim: SWR 1.40+ (Strong V zone)
