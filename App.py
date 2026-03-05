@@ -95,27 +95,17 @@ WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
 # ============================================================
 
 # ============================================================
-# ✅ Helpers — Compliance + Date/Time (paste this in Helpers section)
-# Place this UNDER: "# ============================================================\n# Helpers\n# ============================================================"
-# IMPORTANT:
-#   - DELETE your old pick_logged_days() after pasting this.
-#   - Change days_logged = len(daily_energy_logged)  ->  days_logged = count_logged_days(daily_energy_logged)
+# ✅ Helpers — Compliance + Date/Time (Python 3.8/3.9 safe)
 # ============================================================
 
 TZ = "America/Montreal"
 
-def now_local_date(tz: str = TZ) -> pd.Timestamp:
-    """
-    Today's date in Montreal, normalized to midnight, returned timezone-naive.
-    Avoids server/UTC drift in week windows.
-    """
+def now_local_date(tz=TZ):
+    """Today's date in Montreal, normalized to midnight, returned timezone-naive."""
     return pd.Timestamp.now(tz=tz).normalize().tz_localize(None)
 
-def week_window_last_full(today: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """
-    Last full week window: Monday -> Sunday immediately prior to 'today''s week.
-    Uses your existing monday_of() helper.
-    """
+def week_window_last_full(today):
+    """Last full week window: Monday -> Sunday immediately prior to 'today''s week."""
     this_monday = monday_of(today)
     start = this_monday - pd.Timedelta(days=7)
     end = start + pd.Timedelta(days=6)
@@ -124,15 +114,12 @@ def week_window_last_full(today: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timesta
 def safe_num(series):
     return pd.to_numeric(series, errors="coerce")
 
-def safe_mean(series: pd.Series):
+def safe_mean(series):
     s = safe_num(series)
     return s.mean() if s.notna().any() else pd.NA
 
-def within_tol(actual, target, tol: float) -> bool:
-    """
-    True if actual is within ±tol of target.
-    Returns False for NaNs or target==0.
-    """
+def within_tol(actual, target, tol):
+    """True if actual is within ±tol of target. Returns False for NaNs or target==0."""
     try:
         a = float(actual)
         t = float(target)
@@ -142,11 +129,8 @@ def within_tol(actual, target, tol: float) -> bool:
         return False
     return abs(a - t) <= abs(t) * float(tol)
 
-def collapse_daily(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
-    """
-    Collapse many rows per date into ONE row per date.
-    Uses 'last non-null' per column per day to be stable with re-imports.
-    """
+def collapse_daily(df, date_col="date"):
+    """Collapse many rows per date into ONE row per date using last non-null per column."""
     if df is None or df.empty or date_col not in df.columns:
         return pd.DataFrame()
 
@@ -158,11 +142,11 @@ def collapse_daily(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
 
     d["_row"] = range(len(d))
 
-    def last_nonnull(s: pd.Series):
+    def last_nonnull(s):
         s2 = s.dropna()
         return s2.iloc[-1] if len(s2) else pd.NA
 
-    cols = [c for c in d.columns if c not in ["_row"]]
+    cols = [c for c in d.columns if c != "_row"]
     agg = {c: last_nonnull for c in cols if c != date_col}
 
     out = (
@@ -172,14 +156,12 @@ def collapse_daily(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
     )
     return out
 
-def logged_day_mask(df: pd.DataFrame) -> pd.Series:
+def logged_day_mask(df):
     """
-    Define what counts as a 'logged day'.
-    Priority:
+    What counts as a 'logged day':
       1) days_logged_flag == 1 (if present)
       2) calories present (non-null)
       3) any macro grams present (non-null)
-    NOTE: uses non-null, not >0, so a 0-cal day isn't misclassified as 'not logged'.
     """
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
@@ -200,10 +182,8 @@ def logged_day_mask(df: pd.DataFrame) -> pd.Series:
 
     return cal_ok | macro_ok
 
-def pick_logged_days(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Returns ONE row per logged date (critical for correct days_logged).
-    """
+def pick_logged_days(df):
+    """Returns ONE row per logged date (critical for correct days_logged)."""
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -214,18 +194,14 @@ def pick_logged_days(df: pd.DataFrame) -> pd.DataFrame:
     mask = logged_day_mask(daily)
     return daily.loc[mask].copy()
 
-def count_logged_days(df_logged: pd.DataFrame) -> int:
-    """
-    Count unique logged dates. Assumes df_logged is one-row-per-date.
-    """
+def count_logged_days(df_logged):
+    """Count unique logged dates. Assumes df_logged is one-row-per-date."""
     if df_logged is None or df_logged.empty or "date" not in df_logged.columns:
         return 0
     return int(pd.to_datetime(df_logged["date"], errors="coerce").dt.normalize().nunique())
 
-def compute_calorie_ok_pct(de_logged: pd.DataFrame, cal_tol: float) -> float | pd.NA:
-    """
-    % of logged days where calories within ±cal_tol of calorie_target.
-    """
+def compute_calorie_ok_pct(de_logged, cal_tol):
+    """% of logged days where calories within ±cal_tol of calorie_target."""
     if de_logged is None or de_logged.empty:
         return pd.NA
     if not all(c in de_logged.columns for c in ["calories", "calorie_target"]):
@@ -237,10 +213,10 @@ def compute_calorie_ok_pct(de_logged: pd.DataFrame, cal_tol: float) -> float | p
     ok = a.notna() & t.notna() & (t != 0) & ((a - t).abs() <= (t.abs() * cal_tol))
     return float(ok.mean() * 100.0) if ok.notna().any() else pd.NA
 
-def compute_macros_ok_pct(de_logged: pd.DataFrame, macro_tol: float) -> float | pd.NA:
+def compute_macros_ok_pct(de_logged, macro_tol):
     """
-    % of logged days where ALL (P,C,F) are within ±macro_tol of their targets.
-    If targets missing/unpopulated, falls back to protein_adherence if available.
+    % of logged days where ALL (P,C,F) within ±macro_tol of targets.
+    Falls back to protein_adherence if targets missing/unpopulated.
     """
     if de_logged is None or de_logged.empty:
         return pd.NA
@@ -276,13 +252,11 @@ def compute_macros_ok_pct(de_logged: pd.DataFrame, macro_tol: float) -> float | 
     all_ok = p_ok & c_ok & f_ok
     return float(all_ok.mean() * 100.0) if all_ok.notna().any() else pd.NA
 
-def score_label(score: int) -> str:
+def score_label(score):
     if score >= 85: return "Locked In 🔥"
     if score >= 70: return "Solid ✅"
     if score >= 55: return "Okay — Tighten Up"
     return "Tighten Up ⚠️"
-
-
 
 
 def ensure_df(x) -> pd.DataFrame:
@@ -990,7 +964,7 @@ daily_energy_win_logged = daily_energy_logged
 # ============================================================
 # Compute compliance metrics (single pass, no duplicates)
 # ============================================================
-days_logged = int(len(daily_energy_logged)) if not daily_energy_logged.empty else 0
+days_logged = count_logged_days(daily_energy_logged) if not daily_energy_logged.empty else 0
 logging_ok = days_logged >= MIN_LOG_DAYS
 
 cal_ok_pct = pd.NA
