@@ -7,6 +7,227 @@ from google.oauth2.service_account import Credentials
 import random
 import time
 
+import pandas as pd
+
+# ============================================================
+# ✅ Time + Date helpers (Montreal-safe)
+# ============================================================
+
+TZ = "America/Montreal"
+
+def now_local_date(tz: str = TZ) -> pd.Timestamp:
+    """
+    Return today's local date (normalized to midnight) in the desired timezone.
+    Streamlit servers can run in UTC; this avoids week-window drift.
+    """
+    return pd.Timestamp.now(tz=tz).normalize().tz_localize(None)
+
+def monday_of(ts: pd.Timestamp) -> pd.Timestamp:
+    """
+    Return Monday (00:00) of the week containing ts.
+    Assumes ts is timezone-naive (date normalized).
+    """
+    ts = pd.Timestamp(ts).normalize()
+    return ts - pd.Timedelta(days=int(ts.weekday()))
+
+def week_window_last_full(today: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Last full week window: Monday -> Sunday immediately prior to this week.
+    Example: if today is Wed, this returns last week's Mon..Sun.
+    """
+    this_monday = monday_of(today)
+    start = this_monday - pd.Timedelta(days=7)
+    end = start + pd.Timedelta(days=6)
+    return start, end
+
+def filter_range(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, col: str) -> pd.DataFrame:
+    """
+    Inclusive date filter [start, end] on a date-like column.
+    """
+    if df is None or df.empty or col not in df.columns:
+        return pd.DataFrame()
+    x = df.copy()
+    x[col] = pd.to_datetime(x[col], errors="coerce").dt.normalize()
+    start = pd.Timestamp(start).normalize()
+    end = pd.Timestamp(end).normalize()
+    return x.loc[(x[col].notna()) & (x[col] >= start) & (x[col] <= end)].copy()
+
+# ============================================================
+# ✅ Numeric helpers
+# ============================================================
+
+def safe_num(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce")
+
+def safe_mean(s: pd.Series):
+    s = safe_num(s)
+    return s.mean() if s.notna().any() else pd.NA
+
+def within_tol(actual, target, tol: float) -> bool:
+    """
+    True if actual is within ±tol of target.
+    Returns False for NaNs or target==0.
+    """
+    try:
+        a = float(actual)
+        t = float(target)
+    except Exception:
+        return False
+    if pd.isna(a) or pd.isna(t) or t == 0:
+        return False
+    return abs(a - t) <= abs(t) * float(tol)
+
+# ============================================================
+# ✅ Daily "logged day" detection (THIS is the big fix)
+# ============================================================
+
+def logged_day_mask(df: pd.DataFrame) -> pd.Series:
+    """
+    Define what a 'logged day' is.
+    Priority:
+      1) days_logged_flag == 1 (if present)
+      2) calories present
+      3) any macro grams present
+    """
+    if df is None or df.empty:
+        return pd.Series([], dtype=bool)
+
+    d = df.copy()
+
+    if "days_logged_flag" in d.columns:
+        flag = safe_num(d["days_logged_flag"])
+        return flag.fillna(0).astype(int).eq(1)
+
+    has_cals = "calories" in d.columns
+    has_macros = all(c in d.columns for c in ["protein_g", "carbs_g", "fat_g"])
+
+    cal_ok = safe_num(d["calories"]).notna() if has_cals else pd.Series([False] * len(d), index=d.index)
+    macro_ok = (
+        d[["protein_g", "carbs_g", "fat_g"]].apply(safe_num).notna().any(axis=1)
+        if has_macros else pd.Series([False] * len(d), index=d.index)
+    )
+
+    return cal_ok | macro_ok
+
+def collapse_daily(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
+    """
+    Collapse potentially-many rows per date down to ONE row per date.
+    Strategy:
+      - If there are duplicates, we take the *last non-null* values per day
+        for each column (stable for re-imports / overwrites).
+    """
+    if df is None or df.empty or date_col not in df.columns:
+        return pd.DataFrame()
+
+    d = df.copy()
+    d[date_col] = pd.to_datetime(d[date_col], errors="coerce").dt.normalize()
+    d = d[d[date_col].notna()].copy()
+    if d.empty:
+        return pd.DataFrame()
+
+    # Keep original order so "last" means "latest row" in your sheet
+    d["_row"] = range(len(d))
+
+    def last_nonnull(series: pd.Series):
+        s = series.dropna()
+        return s.iloc[-1] if len(s) else pd.NA
+
+    # Aggregate per date: last non-null per column (excluding helper)
+    cols = [c for c in d.columns if c not in ["_row"]]
+    agg = {c: last_nonnull for c in cols if c != date_col}
+    out = d.sort_values(["date", "_row"]).groupby(date_col, as_index=False).agg(agg)
+
+    return out
+
+def pick_logged_days(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return one-row-per-date for logged days only.
+    This makes days_logged accurate and stops "7/7 always PASS".
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    daily = collapse_daily(df, "date")
+    if daily.empty:
+        return pd.DataFrame()
+
+    mask = logged_day_mask(daily)
+    return daily.loc[mask].copy()
+
+def count_logged_days(df_logged: pd.DataFrame) -> int:
+    """
+    Count unique logged dates. Assumes df_logged is one-row-per-date.
+    """
+    if df_logged is None or df_logged.empty or "date" not in df_logged.columns:
+        return 0
+    return int(pd.to_datetime(df_logged["date"], errors="coerce").dt.normalize().nunique())
+
+# ============================================================
+# ✅ Compliance metrics computation (single pass)
+# ============================================================
+
+def compute_calorie_ok_pct(de_logged: pd.DataFrame, cal_tol: float) -> float | pd.NA:
+    """
+    % of logged days where calories within ±cal_tol of calorie_target.
+    Returns NA if missing required columns.
+    """
+    if de_logged is None or de_logged.empty:
+        return pd.NA
+    if not all(c in de_logged.columns for c in ["calories", "calorie_target"]):
+        return pd.NA
+
+    a = safe_num(de_logged["calories"])
+    t = safe_num(de_logged["calorie_target"])
+
+    ok = a.notna() & t.notna() & (t != 0) & ((a - t).abs() <= (t.abs() * cal_tol))
+    return float(ok.mean() * 100.0) if ok.notna().any() else pd.NA
+
+def compute_macros_ok_pct(de_logged: pd.DataFrame, macro_tol: float) -> float | pd.NA:
+    """
+    % of logged days where ALL (P,C,F) are within ±macro_tol of their targets.
+    Returns NA if targets not present/populated.
+    """
+    if de_logged is None or de_logged.empty:
+        return pd.NA
+
+    needed_actuals = ["protein_g", "carbs_g", "fat_g"]
+    needed_targets = ["protein_target_g", "carbs_target_g", "fat_target_g"]
+
+    has_actuals = all(c in de_logged.columns for c in needed_actuals)
+    has_targets = all(c in de_logged.columns for c in needed_targets)
+
+    if not (has_actuals and has_targets):
+        # Optional fallback: protein_adherence proxy if you keep that column
+        if "protein_adherence" in de_logged.columns:
+            adh = safe_num(de_logged["protein_adherence"])
+            ok = adh.notna() & adh.ge(1.0 - macro_tol)
+            denom = ok.notna().sum()
+            return float(ok.sum() / denom * 100.0) if denom else pd.NA
+        return pd.NA
+
+    # ensure targets are actually populated
+    pt = safe_num(de_logged["protein_target_g"]).fillna(0)
+    ct = safe_num(de_logged["carbs_target_g"]).fillna(0)
+    ft = safe_num(de_logged["fat_target_g"]).fillna(0)
+    if (pt.sum() + ct.sum() + ft.sum()) <= 0:
+        return pd.NA
+
+    p = safe_num(de_logged["protein_g"])
+    c = safe_num(de_logged["carbs_g"])
+    f = safe_num(de_logged["fat_g"])
+
+    p_ok = p.notna() & pt.notna() & (pt != 0) & ((p - pt).abs() <= (pt.abs() * macro_tol))
+    c_ok = c.notna() & ct.notna() & (ct != 0) & ((c - ct).abs() <= (ct.abs() * macro_tol))
+    f_ok = f.notna() & ft.notna() & (ft != 0) & ((f - ft).abs() <= (ft.abs() * macro_tol))
+
+    all_ok = p_ok & c_ok & f_ok
+    return float(all_ok.mean() * 100.0) if all_ok.notna().any() else pd.NA
+
+def score_label(score: int) -> str:
+    if score >= 85: return "Locked In 🔥"
+    if score >= 70: return "Solid ✅"
+    if score >= 55: return "Okay — Tighten Up"
+    return "Tighten Up ⚠️"
 # ============================================================
 # Config: chart scales (edit here)
 # ============================================================
