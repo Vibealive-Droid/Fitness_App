@@ -804,13 +804,6 @@ energy_trustworthy = days_logged_phase >= 4
 # ============================================================
 # Suggested phase: Cut vs Recomp vs Lean bulk (selected range)
 # ============================================================
-
-
-energy_trustworthy = days_logged >= 4
-
-if not energy_trustworthy:
-    avg_bal = pd.NA
-    
 st.subheader("🎯 Suggested phase (Cut / Recomp / Lean bulk)")
 
 def _last_non_na(s: pd.Series):
@@ -821,32 +814,43 @@ def _safe_mean(s: pd.Series):
     s2 = pd.to_numeric(s, errors="coerce").dropna()
     return s2.mean() if not s2.empty else pd.NA
 
-# Use energy balance if available; else approximate from weight trend
+# --- Determine logging confidence for this selected range (from Weekly_Energy)
+# This is NOT the same as "Daily_Energy logged days"; it's the weekly MacroFactor summary.
+days_logged_phase = 0
+if "days_logged" in combined.columns:
+    dl = pd.to_numeric(combined["days_logged"], errors="coerce").dropna()
+    days_logged_phase = int(round(dl.mean())) if not dl.empty else 0
+
+energy_trustworthy = days_logged_phase >= 4  # tune this threshold if you want
+
+# --- Compute energy balance (only if trustworthy)
 avg_bal = pd.NA
-if "avg_calories" in combined.columns and "avg_expenditure" in combined.columns:
-    avg_bal = _safe_mean(pd.to_numeric(combined["avg_calories"], errors="coerce") - pd.to_numeric(combined["avg_expenditure"], errors="coerce"))
+if energy_trustworthy and {"avg_calories", "avg_expenditure"}.issubset(set(combined.columns)):
+    avg_bal = _safe_mean(
+        pd.to_numeric(combined["avg_calories"], errors="coerce")
+        - pd.to_numeric(combined["avg_expenditure"], errors="coerce")
+    )
 
-w0 = _last_non_na(combined.get("weight", pd.Series(dtype=float)))
-bf0 = _last_non_na(combined.get("body_fat", pd.Series(dtype=float)))
+# --- Latest body stats
+w0    = _last_non_na(combined.get("weight", pd.Series(dtype=float)))
+bf0   = _last_non_na(combined.get("body_fat", pd.Series(dtype=float)))
 lean0 = _last_non_na(combined.get("lean_mass", pd.Series(dtype=float)))
-fat0 = _last_non_na(combined.get("fat_mass", pd.Series(dtype=float)))
+fat0  = _last_non_na(combined.get("fat_mass", pd.Series(dtype=float)))
 
-# Weight change over the selected range (per week)
+# --- Weight change rate over selected range (per week) as fallback signal
 w_rate = pd.NA
-if "weight" in combined.columns and combined["weight"].notna().sum() >= 2:
+if "weight" in combined.columns and combined["weight"].notna().sum() >= 2 and "date" in combined.columns:
     tmp = combined[["date", "weight"]].dropna().copy()
     if len(tmp) >= 2:
         days = (tmp["date"].iloc[-1] - tmp["date"].iloc[0]).days
         if days > 0:
             w_rate = (tmp["weight"].iloc[-1] - tmp["weight"].iloc[0]) / (days / 7.0)
 
-# Basic heuristic rules
-# - If BF high-ish and surplus is positive -> suggest cut or recomp
-# - If BF moderate and near maintenance -> recomp
-# - If BF lower and surplus modest -> lean bulk
+# --- Rules
 phase = "Recomp"
 reason = []
 
+# 1) Bodyfat anchor
 if pd.notna(bf0):
     if bf0 >= 18:
         phase = "Cut"
@@ -858,7 +862,8 @@ if pd.notna(bf0):
         phase = "Recomp"
         reason.append("Body fat is in a mid range (≈13–18%).")
 
-if pd.notna(avg_bal) and energy_trustworthy:
+# 2) Energy balance signal (only if trustworthy)
+if pd.notna(avg_bal):
     if avg_bal <= -150:
         phase = "Cut"
         reason.append(f"Average energy balance looks like a deficit ({avg_bal:.0f} kcal/day).")
@@ -869,12 +874,25 @@ if pd.notna(avg_bal) and energy_trustworthy:
     else:
         reason.append("Energy balance looks close to maintenance (±150 kcal/day).")
 else:
-    if not energy_trustworthy:
-        reason.append(f"Energy balance not reliable ({days_logged_phase}/7 days logged).")
+    # 3) Weight-trend fallback signal
+    if pd.notna(w_rate):
+        if w_rate <= -0.25:
+            phase = "Cut"
+            reason.append(f"Weight trend is decreasing (~{w_rate:.2f} lb/week).")
+        elif w_rate >= 0.25:
+            if phase != "Cut":
+                phase = "Lean bulk"
+            reason.append(f"Weight trend is increasing (~{w_rate:.2f} lb/week).")
+        else:
+            reason.append("Weight trend is roughly stable.")
     else:
-        reason.append("Energy balance unavailable.")
+        # Explain why energy wasn't used
+        if not energy_trustworthy:
+            reason.append(f"Energy balance not reliable ({days_logged_phase}/7 days logged in Weekly_Energy).")
+        else:
+            reason.append("Energy balance unavailable.")
 
-# Present result
+# --- Present result
 badge = "✅ RECOMP" if phase == "Recomp" else ("🔥 LEAN BULK" if phase == "Lean bulk" else "✂️ CUT")
 if phase == "Recomp":
     st.success(f"**Suggested focus: {badge}**")
@@ -893,10 +911,13 @@ with cols[2]:
 with cols[3]:
     st.metric("Fat mass", metric_or_dash(fat0, "{:.1f} lb"))
 
+# Show the signal we used
 if pd.notna(avg_bal):
-    st.caption(f"Avg energy balance in range: {avg_bal:.0f} kcal/day")
+    st.caption(f"Avg energy balance in range: {avg_bal:.0f} kcal/day (trustworthy: {energy_trustworthy}, days_logged≈{days_logged_phase}/7)")
 elif pd.notna(w_rate):
-    st.caption(f"Estimated weight change rate: {w_rate:.2f} lb/week")
+    st.caption(f"Estimated weight change rate: {w_rate:.2f} lb/week (energy trustworthy: {energy_trustworthy}, days_logged≈{days_logged_phase}/7)")
+else:
+    st.caption(f"Energy trustworthy: {energy_trustworthy} (days_logged≈{days_logged_phase}/7)")
 
 if reason:
     st.caption("Why: " + " ".join(reason))
