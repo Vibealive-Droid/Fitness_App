@@ -785,6 +785,12 @@ combined = combined.sort_values("date").reset_index(drop=True)
 # ============================================================
 # Suggested phase: Cut vs Recomp vs Lean bulk (selected range)
 # ============================================================
+
+energy_trustworthy = days_logged >= 4
+
+if not energy_trustworthy:
+    avg_bal = pd.NA
+    
 st.subheader("🎯 Suggested phase (Cut / Recomp / Lean bulk)")
 
 def _last_non_na(s: pd.Series):
@@ -832,27 +838,18 @@ if pd.notna(bf0):
         phase = "Recomp"
         reason.append("Body fat is in a mid range (≈13–18%).")
 
-if pd.notna(avg_bal):
+if pd.notna(avg_bal) and energy_trustworthy:
     if avg_bal <= -150:
         phase = "Cut"
         reason.append(f"Average energy balance looks like a deficit ({avg_bal:.0f} kcal/day).")
     elif avg_bal >= 150:
-        # if already high BF, stay cut; otherwise lean bulk
         if phase != "Cut":
             phase = "Lean bulk"
         reason.append(f"Average energy balance looks like a surplus ({avg_bal:.0f} kcal/day).")
     else:
         reason.append("Energy balance looks close to maintenance (±150 kcal/day).")
-elif pd.notna(w_rate):
-    if w_rate <= -0.25:
-        phase = "Cut"
-        reason.append(f"Weight trend is decreasing (~{w_rate:.2f} lb/week).")
-    elif w_rate >= 0.25:
-        if phase != "Cut":
-            phase = "Lean bulk"
-        reason.append(f"Weight trend is increasing (~{w_rate:.2f} lb/week).")
-    else:
-        reason.append("Weight trend is roughly stable.")
+else:
+    reason.append("Energy balance not reliable due to low logging.")
 
 # Present result
 badge = "✅ RECOMP" if phase == "Recomp" else ("🔥 LEAN BULK" if phase == "Lean bulk" else "✂️ CUT")
