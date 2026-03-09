@@ -521,7 +521,7 @@ if body.empty:
 min_date = body["date"].min().date()
 max_body_date = body["date"].max().date()
 
-today = pd.Timestamp.today().normalize()
+today = now_local_date()
 this_monday = monday_of(today)
 
 colA, colB, colC, colD = st.columns([1.4, 1, 1, 2])
@@ -590,22 +590,25 @@ def compute_preset(preset_name: str):
         end = today
         return start.date(), end.date()
 
+    # Custom default
     end = max_body_date
     start = max(min_date, (pd.Timestamp(end) - pd.DateOffset(months=12)).date())
     return start, end
 
 preset_start, preset_end = compute_preset(preset)
 
+# Clamp preset values to valid bounds
 preset_start = max(min_date, min(preset_start, max_end_allowed))
 preset_end = max(min_date, min(preset_end, max_end_allowed))
 if preset_start > preset_end:
     preset_start = preset_end
 
+# For non-custom presets, update widget state BEFORE widgets are created
 if preset != "Custom":
     st.session_state["start_date"] = preset_start
     st.session_state["end_date"] = preset_end
 
-# --- Safe local values for date widgets
+# Safe local values for the widgets
 current_start = st.session_state.get("start_date", preset_start)
 current_end = st.session_state.get("end_date", preset_end)
 
@@ -644,40 +647,25 @@ if start_date is None or end_date is None:
     st.warning("Please select both a start and end date.")
     st.stop()
 
+# Final safety clamp after widget interaction
+start_date = max(min_date, min(start_date, max_end_allowed))
+end_date = max(min_date, min(end_date, max_end_allowed))
+
 if start_date > end_date:
     st.error("Start date must be before end date.")
     st.stop()
 
+# Expand selected dates to full Monday -> Sunday week boundaries
 start_dt_monday = monday_of(pd.Timestamp(start_date))
 end_dt_sunday = sunday_of_week(pd.Timestamp(end_date))
 start_date = start_dt_monday.date()
 end_date = end_dt_sunday.date()
 
+# Weekly tabs can optionally include the next report Monday row
 end_date_for_weekly = end_date
 if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
-    
-# --- Clamp local dates so date_input never gets an out-of-range value
-current_start = st.session_state.get("start_date", preset_start)
-current_end = st.session_state.get("end_date", preset_end)
-
-if current_start is None:
-    current_start = preset_start
-if current_end is None:
-    current_end = preset_end
-
-current_start = max(min_date, min(current_start, max_end_allowed))
-current_end = max(min_date, min(current_end, max_end_allowed))
-
-if current_start > current_end:
-    current_start = current_end
-# Ensure start <= end
-if current_start > current_end:
-    current_start = current_end
-
-st.session_state["start_date"] = current_start
-st.session_state["end_date"] = current_end
 st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
 
 # ============================================================
