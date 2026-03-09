@@ -628,7 +628,7 @@ if preset != "Custom":
 with colB:
     start_date = st.date_input(
         "Start date",
-        value=st.session_state.get("start_date", preset_start),
+        value=st.session_state["start_date"],
         min_value=min_date,
         max_value=max_end_allowed,
         key="start_date",
@@ -638,7 +638,7 @@ with colB:
 with colC:
     end_date = st.date_input(
         "End date",
-        value=st.session_state.get("end_date", preset_end),
+        value=st.session_state["end_date"],
         min_value=min_date,
         max_value=max_end_allowed,
         key="end_date",
