@@ -819,12 +819,21 @@ def _safe_mean(s: pd.Series):
 
 # --- Determine logging confidence for this selected range (from Weekly_Energy)
 # This is NOT the same as "Daily_Energy logged days"; it's the weekly MacroFactor summary.
-days_logged_phase = 0
-if "days_logged" in combined.columns:
-    dl = pd.to_numeric(combined["days_logged"], errors="coerce").dropna()
-    days_logged_phase = int(round(dl.mean())) if not dl.empty else 0
+daily_energy_phase = load_sheet(WS_DAILY_ENERGY)
+daily_energy_phase = normalise_daily_energy_schema(daily_energy_phase)
+daily_energy_phase = normalise_date_col(daily_energy_phase, "date")
+daily_energy_phase = to_num(daily_energy_phase, [
+    "days_logged_flag",
+    "calories", "expenditure",
+    "protein_g", "carbs_g", "fat_g",
+    "protein_adherence", "energy_adherence",
+])
 
-energy_trustworthy = days_logged_phase >= 4  # tune this threshold if you want
+daily_energy_phase = filter_range(daily_energy_phase, start_date, end_date, "date")
+daily_energy_phase_logged = pick_logged_days(daily_energy_phase)
+
+days_logged_phase = count_logged_days(daily_energy_phase_logged)
+energy_trustworthy = days_logged_phase >= 4
 
 # --- Compute energy balance (only if trustworthy)
 avg_bal = pd.NA
@@ -968,9 +977,9 @@ CAL_TOL = 0.10
 MACRO_TOL = 0.10
 MIN_LOG_DAYS = 6  # Matt standard: 6/7 logged days
 
-# Use Montreal-local date to avoid server-time weirdness
-today_ts = now_local_date()
-start_monday, end_sunday = week_window_last_full(today_ts)
+# Use Montreal-local date to avoid server-time weirdnessstart_monday = pd.Timestamp(start_date)
+start_monday = pd.Timestamp(start_date)
+end_sunday = pd.Timestamp(end_date)
 
 st.caption(f"Compliance window: **{start_monday.date()} → {end_sunday.date()}** (Mon→Sun)")
 
