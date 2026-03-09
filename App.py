@@ -1243,10 +1243,29 @@ if "phase" in locals():
 st.subheader(panel_title)
 
 # ============================================================
-# 🏆 Bulk quality score (selected range)
-# Place this BELOW: "🧬 Estimated tissue changes"
+# Dynamic quality score title
 # ============================================================
-# Dynamic panel title based on phase
+if phase == "Lean bulk":
+    panel_title = "🏆 Bulk quality score"
+    score_label_text = "Bulk quality score"
+    summary_good = "Excellent bulk quality — training, intake, and tissue outcome are all lining up well."
+    summary_mid = "Moderate bulk quality — productive, but there are clear levers to tighten."
+    summary_low = "Low bulk quality — you're likely gaining, but not as cleanly or efficiently as you could."
+elif phase == "Cut":
+    panel_title = "✂️ Cut quality score"
+    score_label_text = "Cut quality score"
+    summary_good = "Excellent cut quality — fat loss execution looks tight and well supported by training."
+    summary_mid = "Moderate cut quality — progress is happening, but execution could be tighter."
+    summary_low = "Low cut quality — fat loss execution needs tightening."
+else:
+    panel_title = "⚖️ Recomp quality score"
+    score_label_text = "Recomp quality score"
+    summary_good = "Excellent recomp quality — training and intake are well balanced."
+    summary_mid = "Moderate recomp quality — decent balance, with room to tighten execution."
+    summary_low = "Low recomp quality — training and intake are not lining up well."
+
+st.subheader(panel_title)
+
 if phase == "Lean bulk":
     st.caption("Evaluates how efficiently your surplus is producing muscle vs fat.")
 elif phase == "Cut":
@@ -1254,16 +1273,9 @@ elif phase == "Cut":
 else:
     st.caption("Evaluates balance between training stimulus and energy balance.")
 
-st.subheader(panel_title)
-
-score_label = {
-    "Lean bulk": "Bulk quality score",
-    "Cut": "Cut quality score",
-    "Recomp": "Recomp quality score",
-}.get(phase, "Quality score")
-
-st.metric(score_label, metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
-# ---------- helpers ----------
+# ============================================================
+# Quality score helpers
+# ============================================================
 def clamp(x, lo=0.0, hi=10.0):
     try:
         x = float(x)
@@ -1272,13 +1284,8 @@ def clamp(x, lo=0.0, hi=10.0):
     return max(lo, min(hi, x))
 
 def score_training(workouts_done, minutes_done, sets_total):
-    """
-    0–10
-    Rewards: 4-6 workouts, 180-300+ min, decent hypertrophy set count
-    """
     score = 0.0
 
-    # Workouts (max 4 pts)
     if pd.notna(workouts_done):
         if workouts_done >= 5:
             score += 4.0
@@ -1291,7 +1298,6 @@ def score_training(workouts_done, minutes_done, sets_total):
         elif workouts_done >= 1:
             score += 0.75
 
-    # Minutes (max 3 pts)
     if pd.notna(minutes_done):
         if minutes_done >= 240:
             score += 3.0
@@ -1304,7 +1310,6 @@ def score_training(workouts_done, minutes_done, sets_total):
         elif minutes_done > 0:
             score += 0.5
 
-    # Sets (max 3 pts)
     if pd.notna(sets_total):
         if sets_total >= 70:
             score += 3.0
@@ -1320,65 +1325,44 @@ def score_training(workouts_done, minutes_done, sets_total):
     return clamp(score)
 
 def score_calorie_precision(cal_ok_pct):
-    """
-    0–10
-    Directly scales your existing weekly calorie compliance %
-    """
     if pd.isna(cal_ok_pct):
         return pd.NA
     return clamp((float(cal_ok_pct) / 100.0) * 10.0)
 
 def score_macro_precision(macro_ok_pct):
-    """
-    0–10
-    Directly scales your existing weekly macro compliance %
-    """
     if pd.isna(macro_ok_pct):
         return pd.NA
     return clamp((float(macro_ok_pct) / 100.0) * 10.0)
 
 def score_neat(steps_avg):
-    """
-    0–10
-    Based on avg steps/day
-    """
     if pd.isna(steps_avg):
         return pd.NA
     return clamp((float(steps_avg) / 8000.0) * 10.0)
 
 def score_lean_gain_ratio(muscle_ratio):
-    """
-    0–10
-    For gaining phases:
-      1.0 ratio = elite / perfect
-      0.7 = very good
-      0.4 = moderate
-      0.2 = poor
-    """
     if pd.isna(muscle_ratio):
         return pd.NA
     return clamp(float(muscle_ratio) * 10.0)
 
-# ---------- derive weekly training stats for SELECTED RANGE ----------
+# ============================================================
+# Training totals for selected range
+# ============================================================
 workouts_range = pd.NA
 minutes_range = pd.NA
 sets_range = pd.NA
 
-if "date" in combined.columns:
-    # Pull training metrics straight from combined if present
-    if "workouts_completed" in combined.columns:
-        wc = pd.to_numeric(combined["workouts_completed"], errors="coerce").dropna()
-        workouts_range = float(wc.sum()) if not wc.empty else pd.NA
+if "workouts_completed" in combined.columns:
+    wc = pd.to_numeric(combined["workouts_completed"], errors="coerce").dropna()
+    workouts_range = float(wc.sum()) if not wc.empty else pd.NA
 
-    if "training_minutes_total" in combined.columns:
-        tm = pd.to_numeric(combined["training_minutes_total"], errors="coerce").dropna()
-        minutes_range = float(tm.sum()) if not tm.empty else pd.NA
+if "training_minutes_total" in combined.columns:
+    tm = pd.to_numeric(combined["training_minutes_total"], errors="coerce").dropna()
+    minutes_range = float(tm.sum()) if not tm.empty else pd.NA
 
-    if "sets_total" in combined.columns:
-        stt = pd.to_numeric(combined["sets_total"], errors="coerce").dropna()
-        sets_range = float(stt.sum()) if not stt.empty else pd.NA
+if "sets_total" in combined.columns:
+    stt = pd.to_numeric(combined["sets_total"], errors="coerce").dropna()
+    sets_range = float(stt.sum()) if not stt.empty else pd.NA
 
-# Fallback if combined is missing training totals
 if (pd.isna(workouts_range) or pd.isna(minutes_range) or pd.isna(sets_range)) and not train_view.empty:
     if "workouts_completed" in train_view.columns:
         wc = pd.to_numeric(train_view["workouts_completed"], errors="coerce").dropna()
@@ -1390,7 +1374,9 @@ if (pd.isna(workouts_range) or pd.isna(minutes_range) or pd.isna(sets_range)) an
         stt = pd.to_numeric(train_view["sets_total"], errors="coerce").dropna()
         sets_range = float(stt.sum()) if not stt.empty else sets_range
 
-# ---------- compute component scores ----------
+# ============================================================
+# Component scores
+# ============================================================
 training_score = score_training(workouts_range, minutes_range, sets_range)
 calorie_score = score_calorie_precision(cal_ok_pct if "cal_ok_pct" in locals() else pd.NA)
 macro_score = score_macro_precision(macro_ok_pct if "macro_ok_pct" in locals() else pd.NA)
@@ -1408,11 +1394,13 @@ components = {
 valid_scores = [v for v in components.values() if pd.notna(v)]
 bulk_quality_score = round(sum(valid_scores) / len(valid_scores), 1) if valid_scores else pd.NA
 
-# ---------- display ----------
+# ============================================================
+# Display
+# ============================================================
 q1, q2, q3 = st.columns([1.2, 1, 1])
 
 with q1:
-    st.metric("Bulk quality score", metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
+    st.metric(score_label_text, metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
 
 with q2:
     st.metric("Training stimulus", metric_or_dash(training_score, "{:.1f} / 10"))
@@ -1423,25 +1411,17 @@ with q3:
     st.metric("NEAT / activity", metric_or_dash(neat_score, "{:.1f} / 10"))
     st.metric("Lean gain ratio", metric_or_dash(lean_gain_score, "{:.1f} / 10"))
 
-# ---------- interpretation ----------
 if pd.notna(bulk_quality_score):
     if bulk_quality_score >= 8.5:
-        st.success("Excellent bulk quality — training, intake, and tissue outcome are all lining up well.")
-    elif bulk_quality_score >= 7.0:
-        st.info("Strong bulk quality — this is productive and mostly well-controlled.")
+        st.success(summary_good)
     elif bulk_quality_score >= 5.5:
-        st.warning("Moderate bulk quality — productive, but there are clear levers to tighten.")
+        st.warning(summary_mid)
     else:
-        st.warning("Low bulk quality — you're likely gaining, but not as cleanly or efficiently as you could.")
+        st.warning(summary_low)
 
-# ---------- optional detail table ----------
-detail_rows = []
-for k, v in components.items():
-    detail_rows.append({"Component": k, "Score (/10)": None if pd.isna(v) else round(float(v), 1)})
-
+detail_rows = [{"Component": k, "Score (/10)": None if pd.isna(v) else round(float(v), 1)} for k, v in components.items()]
 detail_df = pd.DataFrame(detail_rows)
 st.dataframe(detail_df, hide_index=True)
-
 # ============================================================
 # 📐 Shape ratios + exaggerated avatar (V-taper caricature)
 # ============================================================
