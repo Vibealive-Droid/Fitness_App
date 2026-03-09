@@ -608,7 +608,7 @@ if preset != "Custom":
 with colB:
     start_date = st.date_input(
         "Start date",
-        value=st.session_state["start_date"],
+        value=current_start,
         min_value=min_date,
         max_value=max_end_allowed,
         key="start_date",
@@ -618,7 +618,7 @@ with colB:
 with colC:
     end_date = st.date_input(
         "End date",
-        value=st.session_state["end_date"],
+        value=current_end,
         min_value=min_date,
         max_value=max_end_allowed,
         key="end_date",
@@ -643,11 +643,10 @@ if include_report_monday:
     end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
     
-# --- Clamp session-state dates so date_input never gets an out-of-range value
+# --- Clamp local dates so date_input never gets an out-of-range value
 current_start = st.session_state.get("start_date", preset_start)
 current_end = st.session_state.get("end_date", preset_end)
 
-# Ensure both are valid dates within bounds
 if current_start is None:
     current_start = preset_start
 if current_end is None:
@@ -656,6 +655,8 @@ if current_end is None:
 current_start = max(min_date, min(current_start, max_end_allowed))
 current_end = max(min_date, min(current_end, max_end_allowed))
 
+if current_start > current_end:
+    current_start = current_end
 # Ensure start <= end
 if current_start > current_end:
     current_start = current_end
