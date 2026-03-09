@@ -1204,7 +1204,20 @@ if pd.notna(muscle_ratio):
         st.info("Moderate lean gain ratio — mixed lean and fat gain (typical lean bulk).")
     else:
         st.warning("Low lean gain ratio — weight gain may be mostly fat.")
-        
+
+# Dynamic panel title based on phase
+panel_title = "🏆 Quality score"
+
+if "phase" in locals():
+    if phase == "Lean bulk":
+        panel_title = "🏆 Bulk quality score"
+    elif phase == "Cut":
+        panel_title = "✂️ Cut quality score"
+    elif phase == "Recomp":
+        panel_title = "⚖️ Recomp quality score"
+
+st.subheader(panel_title)
+
 # ============================================================
 # 🏆 Bulk quality score (selected range)
 # Place this BELOW: "🧬 Estimated tissue changes"
