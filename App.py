@@ -965,6 +965,66 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
     combined.loc[(minutes <= 0) | (minutes.isna()), "volume_per_minute"] = pd.NA
 
 # ============================================================
+# 🧬 Estimated tissue changes (selected range)
+# ============================================================
+st.subheader("🧬 Estimated tissue changes")
+
+def _first_non_na(s: pd.Series):
+    s2 = pd.to_numeric(s, errors="coerce").dropna()
+    return s2.iloc[0] if not s2.empty else pd.NA
+
+def _last_non_na(s: pd.Series):
+    s2 = pd.to_numeric(s, errors="coerce").dropna()
+    return s2.iloc[-1] if not s2.empty else pd.NA
+
+weight_start = _first_non_na(combined.get("weight", pd.Series(dtype=float)))
+weight_end = _last_non_na(combined.get("weight", pd.Series(dtype=float)))
+
+lean_start = _first_non_na(combined.get("lean_mass", pd.Series(dtype=float)))
+lean_end = _last_non_na(combined.get("lean_mass", pd.Series(dtype=float)))
+
+fat_start = _first_non_na(combined.get("fat_mass", pd.Series(dtype=float)))
+fat_end = _last_non_na(combined.get("fat_mass", pd.Series(dtype=float)))
+
+weight_change = pd.NA
+lean_change = pd.NA
+fat_change = pd.NA
+muscle_ratio = pd.NA
+
+if pd.notna(weight_start) and pd.notna(weight_end):
+    weight_change = weight_end - weight_start
+
+if pd.notna(lean_start) and pd.notna(lean_end):
+    lean_change = lean_end - lean_start
+
+if pd.notna(fat_start) and pd.notna(fat_end):
+    fat_change = fat_end - fat_start
+
+if pd.notna(weight_change) and weight_change != 0 and pd.notna(lean_change):
+    muscle_ratio = lean_change / weight_change
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.metric("Weight change", metric_or_dash(weight_change, "{:+.2f} lb"))
+
+with c2:
+    st.metric("Lean mass change", metric_or_dash(lean_change, "{:+.2f} lb"))
+
+with c3:
+    st.metric("Fat mass change", metric_or_dash(fat_change, "{:+.2f} lb"))
+
+with c4:
+    st.metric("Lean gain ratio", metric_or_dash(muscle_ratio, "{:.2f}"))
+
+if pd.notna(muscle_ratio):
+    if muscle_ratio >= 0.70:
+        st.success("Excellent lean gain ratio — most weight gained appears to be lean tissue.")
+    elif muscle_ratio >= 0.40:
+        st.info("Moderate lean gain ratio — mixed lean and fat gain (typical lean bulk).")
+    else:
+        st.warning("Low lean gain ratio — weight gain may be mostly fat.")
+# ============================================================
 # ✅ Compliance (Mon -> Sun) — Matt Standard (uses helpers block)
 # ============================================================
 st.subheader("✅ Compliance (Mon → Sun) — Matt Standard")
