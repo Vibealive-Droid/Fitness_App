@@ -1529,7 +1529,6 @@ st.subheader("This week so far")
 today = pd.Timestamp.now().normalize()
 week_start = monday_of(today)
 week_end = today
-week_df = filter_range(data, week_start, week_end, "date")
 
 # ---- Daily energy
 daily_energy = load_sheet(WS_DAILY_ENERGY)
