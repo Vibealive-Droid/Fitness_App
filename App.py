@@ -1525,10 +1525,10 @@ def _score_label(score: int) -> str:
 # ============================================================
 st.subheader("This week so far")
 
-# --- This week so far window
-today = pd.Timestamp.now().normalize()
-week_start = monday_of(today)
-week_end = today
+# --- Window: Monday of current week -> today (Montreal local)
+today_ts = now_local_date()
+week_start_ts = monday_of(today_ts)
+week_end_ts = today_ts
 
 # ---- Daily energy
 daily_energy = load_sheet(WS_DAILY_ENERGY)
@@ -1544,6 +1544,7 @@ daily_energy = to_num(daily_energy, [
 ])
 
 daily_energy_week = filter_range(daily_energy, week_start_ts, week_end_ts, "date")
+daily_energy_week = ensure_df(daily_energy_week)
 daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
 # ---- Workout log
@@ -1559,7 +1560,7 @@ c1, c2, c3, c4 = st.columns(4)
 
 if not daily_energy_week_logged.empty:
     logged = daily_energy_week_logged.copy()
-    days_logged = int(len(logged))
+    days_logged = count_logged_days(logged)
     avg_cals = logged["calories"].mean() if "calories" in logged.columns else pd.NA
     avg_exp = logged["expenditure"].mean() if "expenditure" in logged.columns else pd.NA
     avg_bal = (avg_cals - avg_exp) if pd.notna(avg_cals) and pd.notna(avg_exp) else pd.NA
@@ -1592,13 +1593,20 @@ else:
         st.metric("Energy adherence", "—")
 
 # Training so far this week
-if (not workout_week.empty) and ("workout_duration" in workout_week.columns) and ("workout" in workout_week.columns):
+if not workout_week.empty and "date" in workout_week.columns:
     wk = workout_week.copy()
-    wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
 
-    session_minutes = safe_num(wk.groupby("session_key")["workout_duration"].max()) / 60.0
-    minutes_total = float(session_minutes.sum()) if session_minutes.notna().any() else pd.NA
-    workouts_completed = int(session_minutes.shape[0])
+    if "workout" in wk.columns:
+        wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
+    else:
+        wk["session_key"] = wk["date"].dt.date.astype(str)
+
+    session_minutes = (
+        safe_num(wk.groupby("session_key")["workout_duration"].max()) / 60.0
+        if "workout_duration" in wk.columns else pd.Series(dtype=float)
+    )
+    minutes_total = float(session_minutes.sum()) if len(session_minutes) and session_minutes.notna().any() else pd.NA
+    workouts_completed = int(wk["session_key"].nunique())
 
     stypes = wk["set_type"].astype(str).str.strip().str.lower() if "set_type" in wk.columns else pd.Series([], dtype=str)
     wk_working = wk[stypes.isin(["standard set", "failure set"])].copy() if len(stypes) else wk.copy()
@@ -1611,6 +1619,7 @@ if (not workout_week.empty) and ("workout_duration" in workout_week.columns) and
     avg_rir = safe_num(wk_working["rir"]).mean() if "rir" in wk_working.columns else pd.NA
     sets_per_hour = sets_total / (minutes_total / 60.0) if (pd.notna(minutes_total) and minutes_total > 0) else pd.NA
 
+    st.caption(f"This week so far window: {week_start_ts.date()} → {week_end_ts.date()}")
     st.caption("Training this week so far")
     t1, t2, t3, t4 = st.columns(4)
     with t1:
@@ -1624,6 +1633,7 @@ if (not workout_week.empty) and ("workout_duration" in workout_week.columns) and
     with t4:
         st.metric("Sets/hour", metric_or_dash(sets_per_hour, "{:.1f}"))
 else:
+    st.caption(f"This week so far window: {week_start_ts.date()} → {week_end_ts.date()}")
     st.caption("No workout log rows for this week yet.")
 
 # ============================================================
