@@ -553,19 +553,20 @@ with colA:
 
 def compute_preset(preset_name: str):
     if preset_name == "Last week (Mon–Sun)":
-        # Previous Monday → today
+        # Previous Monday -> today
         start = this_monday - pd.Timedelta(days=7)
         end = today
         return start.date(), end.date()
+
     if preset_name == "Last 4 weeks":
-        end = this_monday - pd.Timedelta(days=1)
-        start = end - pd.Timedelta(days=27)
-        return monday_of(start).date(), end.date()
+        end = today
+        start = this_monday - pd.Timedelta(days=28)
+        return start.date(), end.date()
 
     if preset_name == "Last 12 weeks":
-        end = this_monday - pd.Timedelta(days=1)
-        start = end - pd.Timedelta(days=83)
-        return monday_of(start).date(), end.date()
+        end = today
+        start = this_monday - pd.Timedelta(days=84)
+        return start.date(), end.date()
 
     if preset_name == "Last month (calendar)":
         first_this_month = pd.Timestamp(today.year, today.month, 1)
@@ -594,7 +595,7 @@ def compute_preset(preset_name: str):
     end = max_body_date
     start = max(min_date, (pd.Timestamp(end) - pd.DateOffset(months=12)).date())
     return start, end
-
+    
 preset_start, preset_end = compute_preset(preset)
 
 # Clamp preset values to valid bounds
