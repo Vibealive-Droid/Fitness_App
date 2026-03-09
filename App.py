@@ -528,7 +528,7 @@ colA, colB, colC, colD = st.columns([1.4, 1, 1, 2])
 
 with colD:
     include_report_monday = st.checkbox(
-        "Include current week (report Monday)",
+        "Include current week up to today",
         value=st.session_state.get("include_report_monday", True),
         help="Weekly Energy/Training rows are stamped on the next Monday. Enable to include that row in filters/charts.",
         key="include_report_monday",
@@ -663,10 +663,13 @@ start_date = start_dt_monday.date()
 end_date = end_dt_sunday.date()
 
 # Weekly tabs can optionally include the next report Monday row
+# Keep weekly filtering capped at the selected end date
 end_date_for_weekly = end_date
-if include_report_monday:
-    end_date_for_weekly = (pd.Timestamp(end_date) + pd.Timedelta(days=7)).date()
 
+if include_report_monday:
+    # Include current week only up to today, not an extra 7 days
+    end_date_for_weekly = min(end_date, today.date())
+    
 st.caption(f"Using Monday-week range: {start_date} → {end_date} (weekly includes up to {end_date_for_weekly})")
 
 # ============================================================
