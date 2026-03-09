@@ -509,6 +509,26 @@ if not body.empty and {"weight", "body_fat"}.issubset(body.columns):
     body["fat_mass"] = (body["weight"] * (body["body_fat"] / 100)).round(2)
     body["lean_mass"] = (body["weight"] - body["fat_mass"]).round(2)
 
+# --- Clamp session-state dates so date_input never gets an out-of-range value
+current_start = st.session_state.get("start_date", preset_start)
+current_end = st.session_state.get("end_date", preset_end)
+
+# Ensure both are valid dates within bounds
+if current_start is None:
+    current_start = preset_start
+if current_end is None:
+    current_end = preset_end
+
+current_start = max(min_date, min(current_start, max_end_allowed))
+current_end = max(min_date, min(current_end, max_end_allowed))
+
+# Ensure start <= end
+if current_start > current_end:
+    current_start = current_end
+
+st.session_state["start_date"] = current_start
+st.session_state["end_date"] = current_end
+
 # ============================================================
 # Date range selector (Monday weeks + presets)
 # ============================================================
@@ -537,26 +557,6 @@ with colD:
 max_end_allowed = max_body_date
 if include_report_monday:
     max_end_allowed = (pd.Timestamp(max_body_date) + pd.Timedelta(days=7)).date()
-
-# --- Clamp session-state dates so date_input never gets an out-of-range value
-current_start = st.session_state.get("start_date", preset_start)
-current_end = st.session_state.get("end_date", preset_end)
-
-# Ensure both are valid dates within bounds
-if current_start is None:
-    current_start = preset_start
-if current_end is None:
-    current_end = preset_end
-
-current_start = max(min_date, min(current_start, max_end_allowed))
-current_end = max(min_date, min(current_end, max_end_allowed))
-
-# Ensure start <= end
-if current_start > current_end:
-    current_start = current_end
-
-st.session_state["start_date"] = current_start
-st.session_state["end_date"] = current_end
 
 with colA:
     preset_options = [
