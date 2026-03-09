@@ -1543,6 +1543,7 @@ daily_energy = to_num(daily_energy, [
     "steps"
 ])
 
+daily_energy_week = filter_range(daily_energy, week_start_ts, week_end_ts, "date")
 daily_energy_week = ensure_df(daily_energy_week)
 daily_energy_week_logged = pick_logged_days(daily_energy_week)
 
