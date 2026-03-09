@@ -1230,8 +1230,6 @@ if pd.notna(muscle_ratio):
     else:
         st.warning("Low lean gain ratio — weight gain may be mostly fat.")
 
-st.subheader(panel_title)
-
 # ============================================================
 # Dynamic quality score title
 # ============================================================
