@@ -553,10 +553,10 @@ with colA:
 
 def compute_preset(preset_name: str):
     if preset_name == "Last week (Mon–Sun)":
-        end = this_monday - pd.Timedelta(days=1)
-        start = end - pd.Timedelta(days=6)
+        # Previous Monday → today
+        start = this_monday - pd.Timedelta(days=7)
+        end = today
         return start.date(), end.date()
-
     if preset_name == "Last 4 weeks":
         end = this_monday - pd.Timedelta(days=1)
         start = end - pd.Timedelta(days=27)
@@ -1241,6 +1241,14 @@ if "phase" in locals():
         panel_title = "⚖️ Recomp quality score"
 
 st.subheader(panel_title)
+
+score_label = {
+    "Lean bulk": "Bulk quality score",
+    "Cut": "Cut quality score",
+    "Recomp": "Recomp quality score",
+}.get(phase, "Quality score")
+
+st.metric(score_label, metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
 
 # ============================================================
 # 🏆 Bulk quality score (selected range)
