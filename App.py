@@ -1525,9 +1525,11 @@ def _score_label(score: int) -> str:
 # ============================================================
 st.subheader("This week so far")
 
-today = pd.Timestamp.today().normalize()
-week_start_ts = monday_of(today)          # Timestamp
-week_end_ts = today                       # Timestamp
+# --- This week so far window
+today = pd.Timestamp.now().normalize()
+week_start = monday_of(today)
+week_end = today
+week_df = filter_range(data, week_start, week_end, "date")
 
 # ---- Daily energy
 daily_energy = load_sheet(WS_DAILY_ENERGY)
@@ -2025,19 +2027,62 @@ else:
 st.divider()
 
 # ============================================================
-# Consistency score (week so far)
+# ✅ Consistency score (this week so far)
+# Uses Monday -> TODAY (Montreal local), not the selected date range
 # ============================================================
 st.header("✅ Consistency score (this week so far)")
 
-days_elapsed = int((today - week_start_ts).days) + 1
-days_logged = int(len(daily_energy_week_logged)) if not daily_energy_week_logged.empty else 0
+# --- Window: Monday of current week -> today
+today_ts = now_local_date()
+week_start_ts = monday_of(today_ts)
+week_end_ts = today_ts
+
+# ---- Daily energy for this week so far
+daily_energy_week = load_sheet(WS_DAILY_ENERGY)
+daily_energy_week = normalise_daily_energy_schema(daily_energy_week)
+daily_energy_week = normalise_date_col(daily_energy_week, "date")
+daily_energy_week = to_num(daily_energy_week, [
+    "days_logged_flag",
+    "calories", "expenditure", "calorie_target", "calorie_delta",
+    "protein_g", "carbs_g", "fat_g",
+    "protein_target_g", "carbs_target_g", "fat_target_g",
+    "protein_adherence", "energy_adherence",
+    "scale_weight_lb", "trend_weight_lb",
+    "steps"
+])
+
+daily_energy_week = filter_range(daily_energy_week, week_start_ts, week_end_ts, "date")
+daily_energy_week = ensure_df(daily_energy_week)
+daily_energy_week_logged = pick_logged_days(daily_energy_week)
+
+# ---- Workout log for this week so far
+workout_week = load_sheet(WS_WORKOUT_LOG)
+workout_week = normalise_workout_log_schema(workout_week)
+workout_week = normalise_date_col(workout_week, "date")
+workout_week = to_num(workout_week, ["workout_duration", "weight_lb", "reps", "rir"])
+workout_week = filter_range(workout_week, week_start_ts, week_end_ts, "date")
+workout_week = ensure_df(workout_week)
+
+# ---- Metrics
+days_elapsed = int((week_end_ts - week_start_ts).days) + 1
+days_logged = count_logged_days(daily_energy_week_logged)
+log_pct = (days_logged / days_elapsed * 100.0) if days_elapsed > 0 else pd.NA
 
 workouts = 0
 minutes_total = pd.NA
-if not workout_week.empty and "workout" in workout_week.columns:
+if not workout_week.empty and "date" in workout_week.columns:
     wk = workout_week.copy()
-    wk["session_key"] = wk["date"].dt.date.astype(str) + "|" + wk["workout"].astype(str).str.strip().str.lower()
+    if "workout" in wk.columns:
+        wk["session_key"] = (
+            wk["date"].dt.date.astype(str)
+            + "|"
+            + wk["workout"].astype(str).str.strip().str.lower()
+        )
+    else:
+        wk["session_key"] = wk["date"].dt.date.astype(str)
+
     workouts = int(wk["session_key"].nunique())
+
     if "workout_duration" in wk.columns:
         mins = pd.to_numeric(wk.groupby("session_key")["workout_duration"].max(), errors="coerce") / 60.0
         minutes_total = float(mins.sum()) if mins.notna().any() else pd.NA
@@ -2046,7 +2091,7 @@ steps_avg = pd.NA
 if not daily_energy_week_logged.empty and "steps" in daily_energy_week_logged.columns:
     steps_avg = pd.to_numeric(daily_energy_week_logged["steps"], errors="coerce").mean()
 
-log_pct = (days_logged / days_elapsed * 100) if days_elapsed > 0 else pd.NA
+st.caption(f"This week so far window: **{week_start_ts.date()} → {week_end_ts.date()}**")
 
 s1, s2, s3, s4 = st.columns(4)
 with s1:
