@@ -1209,8 +1209,15 @@ if pd.notna(muscle_ratio):
 # 🏆 Bulk quality score (selected range)
 # Place this BELOW: "🧬 Estimated tissue changes"
 # ============================================================
-st.subheader("🏆 Bulk quality score")
+# Dynamic panel title based on phase
+if phase == "Lean bulk":
+    st.caption("Evaluates how efficiently your surplus is producing muscle vs fat.")
+elif phase == "Cut":
+    st.caption("Evaluates diet precision, activity, and training stimulus during fat loss.")
+else:
+    st.caption("Evaluates balance between training stimulus and energy balance.")
 
+st.subheader(panel_title)
 # ---------- helpers ----------
 def clamp(x, lo=0.0, hi=10.0):
     try:
