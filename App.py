@@ -1242,14 +1242,6 @@ if "phase" in locals():
 
 st.subheader(panel_title)
 
-score_label = {
-    "Lean bulk": "Bulk quality score",
-    "Cut": "Cut quality score",
-    "Recomp": "Recomp quality score",
-}.get(phase, "Quality score")
-
-st.metric(score_label, metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
-
 # ============================================================
 # 🏆 Bulk quality score (selected range)
 # Place this BELOW: "🧬 Estimated tissue changes"
@@ -1263,6 +1255,14 @@ else:
     st.caption("Evaluates balance between training stimulus and energy balance.")
 
 st.subheader(panel_title)
+
+score_label = {
+    "Lean bulk": "Bulk quality score",
+    "Cut": "Cut quality score",
+    "Recomp": "Recomp quality score",
+}.get(phase, "Quality score")
+
+st.metric(score_label, metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
 # ---------- helpers ----------
 def clamp(x, lo=0.0, hi=10.0):
     try:
