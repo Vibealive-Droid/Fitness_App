@@ -605,6 +605,21 @@ if preset != "Custom":
     st.session_state["start_date"] = preset_start
     st.session_state["end_date"] = preset_end
 
+# --- Safe local values for date widgets
+current_start = st.session_state.get("start_date", preset_start)
+current_end = st.session_state.get("end_date", preset_end)
+
+if current_start is None:
+    current_start = preset_start
+if current_end is None:
+    current_end = preset_end
+
+current_start = max(min_date, min(current_start, max_end_allowed))
+current_end = max(min_date, min(current_end, max_end_allowed))
+
+if current_start > current_end:
+    current_start = current_end
+
 with colB:
     start_date = st.date_input(
         "Start date",
