@@ -994,101 +994,6 @@ daily_energy = to_num(daily_energy, [
     "calories", "expenditure", "calorie_target",
     "protein_g", "carbs_g", "fat_g",
     "protein_target_g", "carbs_target_g", "fat_target_g",
-    "protein_adherence",
-    "steps"
-])
-
-daily_energy_win = filter_range(daily_energy, start_monday, end_sunday, "date")
-daily_energy_win = ensure_df(daily_energy_win)
-
-# ✅ Key: logged days collapsed to ONE row per date
-daily_energy_logged = pick_logged_days(daily_energy_win)
-
-days_logged = count_logged_days(daily_energy_logged)
-logging_ok = days_logged >= MIN_LOG_DAYS
-
-# Calories/macros compliance %
-cal_ok_pct = compute_calorie_ok_pct(daily_energy_logged, CAL_TOL)
-macro_ok_pct = compute_macros_ok_pct(daily_energy_logged, MACRO_TOL)
-
-# Steps
-steps_avg = pd.NA
-steps_ok = False
-if not daily_energy_logged.empty and "steps" in daily_energy_logged.columns:
-    steps_avg = safe_mean(daily_energy_logged["steps"])
-    steps_ok = (pd.notna(steps_avg) and float(steps_avg) >= TARGET_STEPS)
-
-# ============================================================
-# 2) WORKOUT LOG (workouts + minutes)
-# ============================================================
-workout_log = load_sheet(WS_WORKOUT_LOG)
-workout_log = normalise_workout_log_schema(workout_log)
-workout_log = normalise_date_col(workout_log, "date")
-workout_log = to_num(workout_log, ["workout_duration", "weight_lb", "reps", "rir"])
-
-workout_win = filter_range(workout_log, start_monday, end_sunday, "date")
-workout_win = ensure_df(workout_win)
-
-workouts_done = 0
-minutes_done = pd.NA
-
-if not workout_win.empty and "date" in workout_win.columns:
-    wk = workout_win.copy()
-
-    # session_key prevents "sets counted as workouts"
-    if "workout" in wk.columns:
-        wk["session_key"] = (
-            wk["date"].dt.date.astype(str)
-            + "|"
-            + wk["workout"].astype(str).str.strip().str.lower()
-        )
-    else:
-        wk["session_key"] = wk["date"].dt.date.astype(str)
-
-    workouts_done = int(wk["session_key"].nunique())
-
-    # duration: max per session (MacroFactor repeats per set) then sum
-    if "workout_duration" in wk.columns:
-        mins = safe_num(wk.groupby("session_key")["workout_duration"].max()) / 60.0
-        minutes_done = float(mins.sum()) if mins.notna().any() else pd.NA
-
-training_ok = (
-    workouts_done >= TARGET_WORKOUTS
-    and (pd.notna(minutes_done) and float(minutes_done) >= TARGET_MINUTES)
-)
-
-# ============================================================
-# 3) Score
-# ============================================================
-score = 0
-score += 20 if logging_ok else 0
-
-if pd.notna(cal_ok_pct):
-    score += int(round((float(cal_ok_pct) / 100.0) * 30))  # up to 30
-
-if pd.notna(macro_ok_pct):
-    score += int(round((float(macro_ok_pct) / 100.0) * 25))  # up to 25
-
-score += 15 if training_ok else 0
-
-if pd.notna(steps_avg):
-    steps_points = 10 if float(steps_avg) >= TARGET_STEPS else int(round((float(steps_avg) / TARGET_STEPS) * 10))
-    score += max(0, min(10, steps_points))
-
-score = int(max(0, min(100, score)))
-label = score_label(score)
-
-# ============================================================
-# 1) DAILY ENERGY (logging, calories, macros, steps)
-# ============================================================
-daily_energy = load_sheet(WS_DAILY_ENERGY)
-daily_energy = normalise_daily_energy_schema(daily_energy)
-daily_energy = normalise_date_col(daily_energy, "date")
-daily_energy = to_num(daily_energy, [
-    "days_logged_flag",
-    "calories", "expenditure", "calorie_target",
-    "protein_g", "carbs_g", "fat_g",
-    "protein_target_g", "carbs_target_g", "fat_target_g",
     "steps"
 ])
 
@@ -1300,6 +1205,191 @@ if pd.notna(muscle_ratio):
     else:
         st.warning("Low lean gain ratio — weight gain may be mostly fat.")
         
+# ============================================================
+# 🏆 Bulk quality score (selected range)
+# Place this BELOW: "🧬 Estimated tissue changes"
+# ============================================================
+st.subheader("🏆 Bulk quality score")
+
+# ---------- helpers ----------
+def clamp(x, lo=0.0, hi=10.0):
+    try:
+        x = float(x)
+    except Exception:
+        return pd.NA
+    return max(lo, min(hi, x))
+
+def score_training(workouts_done, minutes_done, sets_total):
+    """
+    0–10
+    Rewards: 4-6 workouts, 180-300+ min, decent hypertrophy set count
+    """
+    score = 0.0
+
+    # Workouts (max 4 pts)
+    if pd.notna(workouts_done):
+        if workouts_done >= 5:
+            score += 4.0
+        elif workouts_done == 4:
+            score += 3.5
+        elif workouts_done == 3:
+            score += 2.5
+        elif workouts_done == 2:
+            score += 1.5
+        elif workouts_done >= 1:
+            score += 0.75
+
+    # Minutes (max 3 pts)
+    if pd.notna(minutes_done):
+        if minutes_done >= 240:
+            score += 3.0
+        elif minutes_done >= 200:
+            score += 2.5
+        elif minutes_done >= 150:
+            score += 2.0
+        elif minutes_done >= 100:
+            score += 1.25
+        elif minutes_done > 0:
+            score += 0.5
+
+    # Sets (max 3 pts)
+    if pd.notna(sets_total):
+        if sets_total >= 70:
+            score += 3.0
+        elif sets_total >= 55:
+            score += 2.5
+        elif sets_total >= 40:
+            score += 2.0
+        elif sets_total >= 25:
+            score += 1.25
+        elif sets_total > 0:
+            score += 0.5
+
+    return clamp(score)
+
+def score_calorie_precision(cal_ok_pct):
+    """
+    0–10
+    Directly scales your existing weekly calorie compliance %
+    """
+    if pd.isna(cal_ok_pct):
+        return pd.NA
+    return clamp((float(cal_ok_pct) / 100.0) * 10.0)
+
+def score_macro_precision(macro_ok_pct):
+    """
+    0–10
+    Directly scales your existing weekly macro compliance %
+    """
+    if pd.isna(macro_ok_pct):
+        return pd.NA
+    return clamp((float(macro_ok_pct) / 100.0) * 10.0)
+
+def score_neat(steps_avg):
+    """
+    0–10
+    Based on avg steps/day
+    """
+    if pd.isna(steps_avg):
+        return pd.NA
+    return clamp((float(steps_avg) / 8000.0) * 10.0)
+
+def score_lean_gain_ratio(muscle_ratio):
+    """
+    0–10
+    For gaining phases:
+      1.0 ratio = elite / perfect
+      0.7 = very good
+      0.4 = moderate
+      0.2 = poor
+    """
+    if pd.isna(muscle_ratio):
+        return pd.NA
+    return clamp(float(muscle_ratio) * 10.0)
+
+# ---------- derive weekly training stats for SELECTED RANGE ----------
+workouts_range = pd.NA
+minutes_range = pd.NA
+sets_range = pd.NA
+
+if "date" in combined.columns:
+    # Pull training metrics straight from combined if present
+    if "workouts_completed" in combined.columns:
+        wc = pd.to_numeric(combined["workouts_completed"], errors="coerce").dropna()
+        workouts_range = float(wc.sum()) if not wc.empty else pd.NA
+
+    if "training_minutes_total" in combined.columns:
+        tm = pd.to_numeric(combined["training_minutes_total"], errors="coerce").dropna()
+        minutes_range = float(tm.sum()) if not tm.empty else pd.NA
+
+    if "sets_total" in combined.columns:
+        stt = pd.to_numeric(combined["sets_total"], errors="coerce").dropna()
+        sets_range = float(stt.sum()) if not stt.empty else pd.NA
+
+# Fallback if combined is missing training totals
+if (pd.isna(workouts_range) or pd.isna(minutes_range) or pd.isna(sets_range)) and not train_view.empty:
+    if "workouts_completed" in train_view.columns:
+        wc = pd.to_numeric(train_view["workouts_completed"], errors="coerce").dropna()
+        workouts_range = float(wc.sum()) if not wc.empty else workouts_range
+    if "training_minutes_total" in train_view.columns:
+        tm = pd.to_numeric(train_view["training_minutes_total"], errors="coerce").dropna()
+        minutes_range = float(tm.sum()) if not tm.empty else minutes_range
+    if "sets_total" in train_view.columns:
+        stt = pd.to_numeric(train_view["sets_total"], errors="coerce").dropna()
+        sets_range = float(stt.sum()) if not stt.empty else sets_range
+
+# ---------- compute component scores ----------
+training_score = score_training(workouts_range, minutes_range, sets_range)
+calorie_score = score_calorie_precision(cal_ok_pct if "cal_ok_pct" in locals() else pd.NA)
+macro_score = score_macro_precision(macro_ok_pct if "macro_ok_pct" in locals() else pd.NA)
+neat_score = score_neat(steps_avg if "steps_avg" in locals() else pd.NA)
+lean_gain_score = score_lean_gain_ratio(muscle_ratio if "muscle_ratio" in locals() else pd.NA)
+
+components = {
+    "Training stimulus": training_score,
+    "Calorie precision": calorie_score,
+    "Macro precision": macro_score,
+    "NEAT / activity": neat_score,
+    "Lean gain ratio": lean_gain_score,
+}
+
+valid_scores = [v for v in components.values() if pd.notna(v)]
+bulk_quality_score = round(sum(valid_scores) / len(valid_scores), 1) if valid_scores else pd.NA
+
+# ---------- display ----------
+q1, q2, q3 = st.columns([1.2, 1, 1])
+
+with q1:
+    st.metric("Bulk quality score", metric_or_dash(bulk_quality_score, "{:.1f} / 10"))
+
+with q2:
+    st.metric("Training stimulus", metric_or_dash(training_score, "{:.1f} / 10"))
+    st.metric("Calorie precision", metric_or_dash(calorie_score, "{:.1f} / 10"))
+    st.metric("Macro precision", metric_or_dash(macro_score, "{:.1f} / 10"))
+
+with q3:
+    st.metric("NEAT / activity", metric_or_dash(neat_score, "{:.1f} / 10"))
+    st.metric("Lean gain ratio", metric_or_dash(lean_gain_score, "{:.1f} / 10"))
+
+# ---------- interpretation ----------
+if pd.notna(bulk_quality_score):
+    if bulk_quality_score >= 8.5:
+        st.success("Excellent bulk quality — training, intake, and tissue outcome are all lining up well.")
+    elif bulk_quality_score >= 7.0:
+        st.info("Strong bulk quality — this is productive and mostly well-controlled.")
+    elif bulk_quality_score >= 5.5:
+        st.warning("Moderate bulk quality — productive, but there are clear levers to tighten.")
+    else:
+        st.warning("Low bulk quality — you're likely gaining, but not as cleanly or efficiently as you could.")
+
+# ---------- optional detail table ----------
+detail_rows = []
+for k, v in components.items():
+    detail_rows.append({"Component": k, "Score (/10)": None if pd.isna(v) else round(float(v), 1)})
+
+detail_df = pd.DataFrame(detail_rows)
+st.dataframe(detail_df, hide_index=True)
+
 # ============================================================
 # 📐 Shape ratios + exaggerated avatar (V-taper caricature)
 # ============================================================
