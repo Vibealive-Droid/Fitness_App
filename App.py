@@ -1468,22 +1468,28 @@ OVERLAY_DIR = Path("assets/avatars/overlay")
 left, right = st.columns([1.1, 1.4])
 
 # --- Persist last-used values in session
+saved = load_saved_measurements()
+
 if "height_in" not in st.session_state:
-    st.session_state["height_in"] = float(DEFAULT_HEIGHT_IN)
+    st.session_state["height_in"] = saved["height_in"]
 
 if "weight_lb_manual" not in st.session_state:
-    st.session_state["weight_lb_manual"] = float(DEFAULT_WEIGHT_LB)
+    st.session_state["weight_lb_manual"] = saved["weight_lb_manual"]
 
 if "shoulders_in" not in st.session_state:
-    st.session_state["shoulders_in"] = float(DEFAULT_SHOULDERS)
+    st.session_state["shoulders_in"] = saved["shoulders_in"]
 
 if "waist_in" not in st.session_state:
-    st.session_state["waist_in"] = float(DEFAULT_WAIST)
+    st.session_state["waist_in"] = saved["waist_in"]
 
 if "hips_in" not in st.session_state:
-    st.session_state["hips_in"] = float(DEFAULT_HIPS)
+    st.session_state["hips_in"] = saved["hips_in"]
 
 with left:
+    if st.button("Save measurements"):
+    save_measurements()
+    st.success("Measurements saved.")
+    
     st.subheader("Measurements (inches)")
 
     height_in = st.number_input(
