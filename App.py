@@ -1562,80 +1562,79 @@ with right:
     overlay_avatar = get_overlay_name(whtr)
 
     # ------------------------------------------------------------
-# Tier badge + progress to next tier
-# ------------------------------------------------------------
+    # Tier badge + progress to next tier
+    # ------------------------------------------------------------
 
-def get_tier_info(swr_val):
-    if pd.isna(swr_val):
-        return {
-            "label": "ATHLETIC",
-            "emoji": "🏃",
-            "current_floor": 1.25,
-            "next_target": 1.35,
-            "next_label": "STRONG V",
-        }
-    elif swr_val < 1.25:
-        return {
-            "label": "BLOCK",
-            "emoji": "🧱",
-            "current_floor": 0.0,
-            "next_target": 1.25,
-            "next_label": "ATHLETIC",
-        }
-    elif swr_val < 1.35:
-        return {
-            "label": "ATHLETIC",
-            "emoji": "🏃",
-            "current_floor": 1.25,
-            "next_target": 1.35,
-            "next_label": "STRONG V",
-        }
-    elif swr_val < 1.45:
-        return {
-            "label": "STRONG V",
-            "emoji": "🛡",
-            "current_floor": 1.35,
-            "next_target": 1.45,
-            "next_label": "WIDE",
-        }
-    elif swr_val < 1.55:
-        return {
-            "label": "WIDE",
-            "emoji": "🦅",
-            "current_floor": 1.45,
-            "next_target": 1.55,
-            "next_label": "SAVAGE",
-        }
+    def get_tier_info(swr_val):
+        if pd.isna(swr_val):
+            return {
+                "label": "ATHLETIC",
+                "emoji": "🏃",
+                "current_floor": 1.25,
+                "next_target": 1.35,
+                "next_label": "STRONG V",
+            }
+        elif swr_val < 1.25:
+            return {
+                "label": "BLOCK",
+                "emoji": "🧱",
+                "current_floor": 0.0,
+                "next_target": 1.25,
+                "next_label": "ATHLETIC",
+            }
+        elif swr_val < 1.35:
+            return {
+                "label": "ATHLETIC",
+                "emoji": "🏃",
+                "current_floor": 1.25,
+                "next_target": 1.35,
+                "next_label": "STRONG V",
+            }
+        elif swr_val < 1.45:
+            return {
+                "label": "STRONG V",
+                "emoji": "🛡",
+                "current_floor": 1.35,
+                "next_target": 1.45,
+                "next_label": "WIDE",
+            }
+        elif swr_val < 1.55:
+            return {
+                "label": "WIDE",
+                "emoji": "🦅",
+                "current_floor": 1.45,
+                "next_target": 1.55,
+                "next_label": "SAVAGE",
+            }
+        else:
+            return {
+                "label": "SAVAGE",
+                "emoji": "👑",
+                "current_floor": 1.55,
+                "next_target": None,
+                "next_label": None,
+            }
+
+    tier = get_tier_info(swr)
+
+    st.markdown(f"### {tier['emoji']} {tier['label']}")
+
+    if tier["next_target"] is not None and pd.notna(swr):
+        progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
+        progress = max(0.0, min(1.0, progress))
+
+        st.progress(progress)
+        st.caption(
+            f"Progress to **{tier['next_label']}**: {progress * 100:.0f}% "
+            f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
+        )
     else:
-        return {
-            "label": "SAVAGE",
-            "emoji": "👑",
-            "current_floor": 1.55,
-            "next_target": None,
-            "next_label": None,
-        }
-
-tier = get_tier_info(swr)
-
-st.markdown(f"### {tier['emoji']} {tier['label']}")
-
-if tier["next_target"] is not None and pd.notna(swr):
-    progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
-    progress = max(0.0, min(1.0, progress))
-
-    st.progress(progress)
-    st.caption(
-        f"Progress to **{tier['next_label']}**: {progress * 100:.0f}% "
-        f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
-    )
-else:
-    st.caption("Top tier reached. Just keep refining.")
+        st.caption("Top tier reached. Just keep refining.")
 
     try:
         avatar_img = Image.open(BASE_DIR / base_avatar)
 
-        # Center the image and make it smaller
-        c1, c2, c3 = st.columns([1,2,1])
+        c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
             st.image(avatar_img, width=320)
 
@@ -1662,7 +1661,7 @@ else:
 
     elif pd.notna(swr):
         st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
-
+        
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
