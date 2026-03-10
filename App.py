@@ -1420,14 +1420,6 @@ st.dataframe(detail_df, hide_index=True)
 # ============================================================
 st.header("📐 Shape ratios + V-taper avatar")
 
-# --- Defaults (from your RENPHO screenshot)
-DEFAULT_HEIGHT_IN = 71.0  # 5'11"
-DEFAULT_WEIGHT_LB = float(w0) if (w0 is not None and not pd.isna(w0)) else 195.0
-
-DEFAULT_SHOULDERS = 47.25
-DEFAULT_WAIST = 38.85
-DEFAULT_HIPS = 36.92
-
 # --- Avatar asset paths
 AVATAR_DIR = Path("assets/avatars")
 
