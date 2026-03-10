@@ -1550,6 +1550,7 @@ def load_avatar(base_name, overlay_name):
 
     return base_img
 
+
 # ------------------------------------------------------------
 # Display avatar
 # ------------------------------------------------------------
@@ -1563,7 +1564,10 @@ with right:
     try:
         avatar_img = Image.open(BASE_DIR / base_avatar)
 
-        st.image(avatar_img, use_container_width=True)
+        # Center the image and make it smaller
+        c1, c2, c3 = st.columns([1,2,1])
+        with c2:
+            st.image(avatar_img, width=320)
 
         st.caption(
             f"Build: **{base_avatar.replace('.png','')}**  |  "
@@ -1585,6 +1589,7 @@ with right:
             f'If shoulders stay {shoulders_in:.2f}", waist ≈ {waist_needed:.1f}" | '
             f'If waist stays {waist_in:.2f}", shoulders ≈ {shoulders_needed:.1f}"'
         )
+
     elif pd.notna(swr):
         st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
 
