@@ -1433,15 +1433,31 @@ AVATAR_DIR = Path("assets/avatars")
 
 left, right = st.columns([1.1, 1.4])
 
+# --- Persist last-used values in session
+if "height_in" not in st.session_state:
+    st.session_state["height_in"] = float(DEFAULT_HEIGHT_IN)
+
+if "weight_lb_manual" not in st.session_state:
+    st.session_state["weight_lb_manual"] = float(DEFAULT_WEIGHT_LB)
+
+if "shoulders_in" not in st.session_state:
+    st.session_state["shoulders_in"] = float(DEFAULT_SHOULDERS)
+
+if "waist_in" not in st.session_state:
+    st.session_state["waist_in"] = float(DEFAULT_WAIST)
+
+if "hips_in" not in st.session_state:
+    st.session_state["hips_in"] = float(DEFAULT_HIPS)
+
 with left:
     st.subheader("Measurements (inches)")
 
-    height_in = st.number_input("Height (in)", 50.0, 90.0, DEFAULT_HEIGHT_IN, 0.5)
-    weight_lb = st.number_input("Weight (lb)", 120.0, 350.0, float(DEFAULT_WEIGHT_LB), 0.5)
+    height_in = st.number_input("Height (in)", 50.0, 90.0, step=0.5, key="height_in")
+    weight_lb = st.number_input("Weight (lb)", 120.0, 350.0, step=0.5, key="weight_lb_manual")
 
-    shoulders_in = st.number_input("Shoulders", 30.0, 70.0, float(DEFAULT_SHOULDERS), 0.05)
-    waist_in = st.number_input("Waist (navel)", 20.0, 70.0, float(DEFAULT_WAIST), 0.05)
-    hips_in = st.number_input("Hips", 25.0, 70.0, float(DEFAULT_HIPS), 0.05)
+    shoulders_in = st.number_input("Shoulders", 30.0, 70.0, step=0.05, key="shoulders_in")
+    waist_in = st.number_input("Waist (navel)", 20.0, 70.0, step=0.05, key="waist_in")
+    hips_in = st.number_input("Hips", 25.0, 70.0, step=0.05, key="hips_in")
 
     st.caption("Tip: keep tape tension + timing consistent. Update monthly for best signal.")
 
