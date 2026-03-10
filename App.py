@@ -1559,19 +1559,14 @@ with right:
     st.subheader("Avatar")
 
     base_avatar = get_base_avatar_name(swr)
-    overlay_avatar = get_overlay_name(whtr)
+    base_path = AVATAR_DIR / base_avatar
 
     try:
-        avatar_img = load_avatar_image(base_avatar, overlay_avatar)
+        avatar_img = Image.open(base_path)
         st.image(avatar_img, use_container_width=True)
-
-        st.caption(
-            f"Base: **{base_avatar.replace('.png','')}** | "
-            f"Overlay: **{overlay_avatar.replace('.png','')}**"
-        )
-
+        st.caption(f"Current build: **{base_avatar.replace('.png','')}**")
     except Exception as e:
-        st.error("Could not load avatar images.")
+        st.error("Could not load avatar image.")
         st.caption(str(e))
 
     target_swr = 1.40
