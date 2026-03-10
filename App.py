@@ -1501,7 +1501,11 @@ with left:
 # Avatar file pickers
 # ------------------------------------------------------------
 
+BASE_DIR = Path("assets/avatars/base")
+OVERLAY_DIR = Path("assets/avatars/overlay")
+
 def get_base_avatar_name(swr_val):
+
     if pd.isna(swr_val):
         return "athletic.png"
     elif swr_val < 1.25:
@@ -1515,7 +1519,9 @@ def get_base_avatar_name(swr_val):
     else:
         return "savage_v.png"
 
+
 def get_overlay_name(whtr_val):
+
     if pd.isna(whtr_val):
         return "midsection_ok.png"
     elif whtr_val >= 0.53:
@@ -1525,29 +1531,22 @@ def get_overlay_name(whtr_val):
     else:
         return "midsection_low.png"
 
-def load_avatar_image(base_name, overlay_name):
-    """
-    Loads base + overlay from assets/avatars/.
-    If overlay is missing or unusable, returns base only.
-    """
-    base_path = AVATAR_DIR / base_name
-    overlay_path = AVATAR_DIR / overlay_name
 
-    if not base_path.exists():
-        raise FileNotFoundError(f"Missing base avatar: {base_path}")
+def load_avatar(base_name, overlay_name):
+
+    base_path = BASE_DIR / base_name
+    overlay_path = OVERLAY_DIR / overlay_name
 
     base_img = Image.open(base_path).convert("RGBA")
 
     if overlay_path.exists():
+
         overlay_img = Image.open(overlay_path).convert("RGBA")
 
-        # Resize overlay to match base if needed
         if overlay_img.size != base_img.size:
             overlay_img = overlay_img.resize(base_img.size)
 
-        # Composite overlay on top of base
-        composed = Image.alpha_composite(base_img, overlay_img)
-        return composed
+        base_img = Image.alpha_composite(base_img, overlay_img)
 
     return base_img
 
