@@ -1418,10 +1418,17 @@ st.dataframe(detail_df, hide_index=True)
 # ============================================================
 # 📐 Shape ratios + avatar (PNG-based)
 # ============================================================
+DEFAULT_HEIGHT_IN = 71.0
+DEFAULT_WEIGHT_LB = float(w0) if (w0 is not None and not pd.isna(w0)) else 195.0
+DEFAULT_SHOULDERS = 47.25
+DEFAULT_WAIST = 38.85
+DEFAULT_HIPS = 36.92
+
 st.header("📐 Shape ratios + V-taper avatar")
 
 # --- Avatar asset paths
-AVATAR_DIR = Path("assets/avatars")
+BASE_DIR = Path("assets/avatars/base")
+OVERLAY_DIR = Path("assets/avatars/overlay")
 
 left, right = st.columns([1.1, 1.4])
 
@@ -1444,12 +1451,45 @@ if "hips_in" not in st.session_state:
 with left:
     st.subheader("Measurements (inches)")
 
-    height_in = st.number_input("Height (in)", 50.0, 90.0, step=0.5, key="height_in")
-    weight_lb = st.number_input("Weight (lb)", 120.0, 350.0, step=0.5, key="weight_lb_manual")
+    height_in = st.number_input(
+        "Height (in)",
+        min_value=50.0,
+        max_value=90.0,
+        step=0.5,
+        key="height_in",
+    )
 
-    shoulders_in = st.number_input("Shoulders", 30.0, 70.0, step=0.05, key="shoulders_in")
-    waist_in = st.number_input("Waist (navel)", 20.0, 70.0, step=0.05, key="waist_in")
-    hips_in = st.number_input("Hips", 25.0, 70.0, step=0.05, key="hips_in")
+    weight_lb = st.number_input(
+        "Weight (lb)",
+        min_value=120.0,
+        max_value=350.0,
+        step=0.5,
+        key="weight_lb_manual",
+    )
+
+    shoulders_in = st.number_input(
+        "Shoulders",
+        min_value=30.0,
+        max_value=70.0,
+        step=0.05,
+        key="shoulders_in",
+    )
+
+    waist_in = st.number_input(
+        "Waist (navel)",
+        min_value=20.0,
+        max_value=70.0,
+        step=0.05,
+        key="waist_in",
+    )
+
+    hips_in = st.number_input(
+        "Hips",
+        min_value=25.0,
+        max_value=70.0,
+        step=0.05,
+        key="hips_in",
+    )
 
     st.caption("Tip: keep tape tension + timing consistent. Update monthly for best signal.")
 
@@ -1504,7 +1544,7 @@ with left:
             st.info("Waist/Height is in a solid general range.")
         else:
             st.warning("Midsection is currently the main lever for your taper.")
-
+            
 # ------------------------------------------------------------
 # Avatar file pickers
 # ------------------------------------------------------------
