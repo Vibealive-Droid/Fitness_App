@@ -1429,6 +1429,20 @@ def load_saved_measurements():
         "hips_in": float(DEFAULT_HIPS),
     }
 
+import json
+from pathlib import Path
+
+MEASUREMENTS_FILE = Path("measurements.json")
+
+def load_saved_measurements():
+    defaults = {
+        "height_in": float(DEFAULT_HEIGHT_IN),
+        "weight_lb_manual": float(DEFAULT_WEIGHT_LB),
+        "shoulders_in": float(DEFAULT_SHOULDERS),
+        "waist_in": float(DEFAULT_WAIST),
+        "hips_in": float(DEFAULT_HIPS),
+    }
+
     if MEASUREMENTS_FILE.exists():
         try:
             with open(MEASUREMENTS_FILE, "r") as f:
