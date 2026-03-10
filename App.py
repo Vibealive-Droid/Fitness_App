@@ -1486,7 +1486,8 @@ if "hips_in" not in st.session_state:
     st.session_state["hips_in"] = saved["hips_in"]
 
 with left:
-    if st.button("Save measurements"):
+    
+if st.button("Save measurements"):
     save_measurements()
     st.success("Measurements saved.")
     
