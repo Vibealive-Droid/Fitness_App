@@ -1467,7 +1467,7 @@ OVERLAY_DIR = Path("assets/avatars/overlay")
 
 left, right = st.columns([1.1, 1.4])
 
-# --- Persist last-used values in session
+# --- Persist last-used values
 saved = load_saved_measurements()
 
 if "height_in" not in st.session_state:
@@ -1486,11 +1486,6 @@ if "hips_in" not in st.session_state:
     st.session_state["hips_in"] = saved["hips_in"]
 
 with left:
-    
-if st.button("Save measurements"):
-    save_measurements()
-    st.success("Measurements saved.")
-    
     st.subheader("Measurements (inches)")
 
     height_in = st.number_input(
@@ -1532,6 +1527,10 @@ if st.button("Save measurements"):
         step=0.05,
         key="hips_in",
     )
+
+    if st.button("Save measurements"):
+        save_measurements()
+        st.success("Measurements saved.")
 
     st.caption("Tip: keep tape tension + timing consistent. Update monthly for best signal.")
 
