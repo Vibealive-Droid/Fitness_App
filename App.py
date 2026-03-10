@@ -1561,7 +1561,7 @@ with right:
     overlay_avatar = get_overlay_name(whtr)
 
     try:
-        avatar_img = load_avatar(base_avatar, overlay_avatar)
+        avatar_img = Image.open(BASE_DIR / base_avatar)
 
         st.image(avatar_img, use_container_width=True)
 
