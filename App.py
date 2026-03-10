@@ -6,6 +6,8 @@ import random
 import time
 import math
 import base64
+from pathlib import Path
+from PIL import Image
 from io import BytesIO
 from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
@@ -1414,7 +1416,7 @@ detail_rows = [{"Component": k, "Score (/10)": None if pd.isna(v) else round(flo
 detail_df = pd.DataFrame(detail_rows)
 st.dataframe(detail_df, hide_index=True)
 # ============================================================
-# 📐 Shape ratios + exaggerated avatar (V-taper caricature)
+# 📐 Shape ratios + avatar (PNG-based)
 # ============================================================
 st.header("📐 Shape ratios + V-taper avatar")
 
@@ -1425,6 +1427,9 @@ DEFAULT_WEIGHT_LB = float(w0) if (w0 is not None and not pd.isna(w0)) else 195.0
 DEFAULT_SHOULDERS = 47.25
 DEFAULT_WAIST = 38.85
 DEFAULT_HIPS = 36.92
+
+# --- Avatar asset paths
+AVATAR_DIR = Path("assets/avatars")
 
 left, right = st.columns([1.1, 1.4])
 
@@ -1447,17 +1452,17 @@ def _safe_ratio(a, b):
         if b == 0:
             return pd.NA
         return a / b
-    except:
+    except Exception:
         return pd.NA
 
-swr = _safe_ratio(shoulders_in, waist_in)
-shr = _safe_ratio(shoulders_in, hips_in)
-whtr = _safe_ratio(waist_in, height_in)
+swr = _safe_ratio(shoulders_in, waist_in)   # shoulder / waist
+shr = _safe_ratio(shoulders_in, hips_in)    # shoulder / hip
+whtr = _safe_ratio(waist_in, height_in)     # waist / height
 
 def v_state(val):
     if pd.isna(val):
         return "—"
-    if val < 1.25:
+    elif val < 1.25:
         return "Block"
     elif val < 1.35:
         return "Athletic"
@@ -1493,206 +1498,95 @@ with left:
             st.warning("Midsection is currently the main lever for your taper.")
 
 # ------------------------------------------------------------
-# SVG Avatar Generator
+# Avatar file pickers
 # ------------------------------------------------------------
 
-def make_v_avatar_svg(shoulders, waist, hips, swr_val):
-    # Canvas
-    W, H = 320, 420
-    cx = W / 2
+def get_base_avatar_name(swr_val):
+    if pd.isna(swr_val):
+        return "athletic.png"
+    elif swr_val < 1.25:
+        return "block.png"
+    elif swr_val < 1.35:
+        return "athletic.png"
+    elif swr_val < 1.45:
+        return "strong_v.png"
+    elif swr_val < 1.55:
+        return "wide.png"
+    else:
+        return "savage_v.png"
 
-    # --- Stable normalisation
-    base_swr = 1.22
-    if swr_val is None or pd.isna(swr_val):
-        swr_val = base_swr
-    swr_val = float(swr_val)
+def get_overlay_name(whtr_val):
+    if pd.isna(whtr_val):
+        return "midsection_ok.png"
+    elif whtr_val >= 0.53:
+        return "midsection_high.png"
+    elif whtr_val >= 0.50:
+        return "midsection_ok.png"
+    else:
+        return "midsection_low.png"
 
-    exaggeration = 1.15
-    widen = math.sqrt(max(0.75, min(1.75, (swr_val / base_swr)))) * exaggeration
-    tighten = math.sqrt(max(0.75, min(1.75, (base_swr / swr_val)))) * exaggeration
-
-    # --- Convert circumferences to visual widths (cartoon proxy)
-    shoulder_w = max(120, min(240, (float(shoulders) * 2.0) * widen))
-    hip_w      = max(105, min(210, (float(hips) * 1.9) * (0.92 + 0.08*widen)))
-    waist_w    = max(78,  min(190, (float(waist) * 1.8) * (0.86 * tighten)))
-
-    # Half-widths
-    sx = shoulder_w / 2
-    hx = hip_w / 2
-    wx = waist_w / 2
-
-    # Y coords
-    y_head = 64
-    y_neck_top = 86
-    y_shoulder = 118
-    y_chest = 152
-    y_waist = 220
-    y_hip = 272
-    y_crotch = 302
-    y_knee = 360
-    y_ankle = 400
-
-    # Arms (simple droop)
-    arm_out = sx * 0.92
-    arm_in = sx * 0.62
-    y_arm_top = y_shoulder + 8
-    y_arm_mid = y_waist - 18
-
-    # Legs
-    leg_gap = max(14, min(26, wx * 0.32))     # space between legs at crotch
-    thigh_w = max(34, min(70, hx * 0.55))
-    calf_w  = max(26, min(58, hx * 0.45))
-    ankle_w = max(18, min(42, hx * 0.34))
-
-    # Torso outline (rounded delts + clear waist pinch)
-    torso_path = f"""
-    M {cx - sx:.1f},{y_shoulder:.1f}
-    Q {cx:.1f},{y_shoulder - 34:.1f} {cx + sx:.1f},{y_shoulder:.1f}
-
-    Q {cx + sx*0.90:.1f},{y_chest:.1f} {cx + wx:.1f},{y_waist:.1f}
-    Q {cx:.1f},{y_waist + 18:.1f} {cx - wx:.1f},{y_waist:.1f}
-    Q {cx - sx*0.90:.1f},{y_chest:.1f} {cx - sx:.1f},{y_shoulder:.1f}
-
-    M {cx - wx:.1f},{y_waist:.1f}
-    Q {cx - hx*0.95:.1f},{y_hip:.1f} {cx - hx:.1f},{y_hip:.1f}
-    Q {cx:.1f},{y_hip + 18:.1f} {cx + hx:.1f},{y_hip:.1f}
-    Q {cx + hx*0.95:.1f},{y_hip:.1f} {cx + wx:.1f},{y_waist:.1f}
-    Z
+def load_avatar_image(base_name, overlay_name):
     """
-
-    # Arms (two simple tapered shapes)
-    left_arm = f"""
-    M {cx - arm_in:.1f},{y_arm_top:.1f}
-    Q {cx - arm_out:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx - arm_in*0.92:.1f},{y_arm_mid:.1f}
-    Q {cx - arm_in*0.75:.1f},{y_arm_mid + 18:.1f} {cx - arm_in*0.60:.1f},{y_arm_mid:.1f}
-    Q {cx - arm_out*0.72:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx - arm_in:.1f},{y_arm_top:.1f}
-    Z
+    Loads base + overlay from assets/avatars/.
+    If overlay is missing or unusable, returns base only.
     """
-    right_arm = f"""
-    M {cx + arm_in:.1f},{y_arm_top:.1f}
-    Q {cx + arm_out:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx + arm_in*0.92:.1f},{y_arm_mid:.1f}
-    Q {cx + arm_in*0.75:.1f},{y_arm_mid + 18:.1f} {cx + arm_in*0.60:.1f},{y_arm_mid:.1f}
-    Q {cx + arm_out*0.72:.1f},{(y_arm_top + y_arm_mid)/2:.1f} {cx + arm_in:.1f},{y_arm_top:.1f}
-    Z
-    """
+    base_path = AVATAR_DIR / base_name
+    overlay_path = AVATAR_DIR / overlay_name
 
-    # Legs (two shapes so it stops looking like one pillar)
-    left_leg = f"""
-    M {cx - leg_gap/2:.1f},{y_crotch:.1f}
-    L {cx - leg_gap/2 - thigh_w:.1f},{y_knee:.1f}
-    Q {cx - leg_gap/2 - calf_w:.1f},{y_ankle - 10:.1f} {cx - leg_gap/2 - ankle_w:.1f},{y_ankle:.1f}
-    Q {cx - leg_gap/2:.1f},{y_ankle + 4:.1f} {cx - leg_gap/2 + ankle_w:.1f},{y_ankle:.1f}
-    Q {cx - leg_gap/2 + calf_w:.1f},{y_ankle - 10:.1f} {cx - leg_gap/2 + thigh_w*0.25:.1f},{y_knee:.1f}
-    Z
-    """
-    right_leg = f"""
-    M {cx + leg_gap/2:.1f},{y_crotch:.1f}
-    L {cx + leg_gap/2 + thigh_w:.1f},{y_knee:.1f}
-    Q {cx + leg_gap/2 + calf_w:.1f},{y_ankle - 10:.1f} {cx + leg_gap/2 + ankle_w:.1f},{y_ankle:.1f}
-    Q {cx + leg_gap/2:.1f},{y_ankle + 4:.1f} {cx + leg_gap/2 - ankle_w:.1f},{y_ankle:.1f}
-    Q {cx + leg_gap/2 - calf_w:.1f},{y_ankle - 10:.1f} {cx + leg_gap/2 - thigh_w*0.25:.1f},{y_knee:.1f}
-    Z
-    """
+    if not base_path.exists():
+        raise FileNotFoundError(f"Missing base avatar: {base_path}")
 
-    # Neck width roughly from shoulder/waist relationship (small visual detail)
-    neck_w = max(18, min(30, sx * 0.18))
+    base_img = Image.open(base_path).convert("RGBA")
 
-    svg = f"""
-    <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
-      <rect width="100%" height="100%" fill="transparent"/>
+    if overlay_path.exists():
+        overlay_img = Image.open(overlay_path).convert("RGBA")
 
-      <!-- head -->
-      <circle cx="{cx:.1f}" cy="{y_head:.1f}" r="28" fill="#2b2b2b" opacity="0.88"/>
+        # Resize overlay to match base if needed
+        if overlay_img.size != base_img.size:
+            overlay_img = overlay_img.resize(base_img.size)
 
-      <!-- neck -->
-      <rect x="{cx - neck_w/2:.1f}" y="{y_neck_top:.1f}" width="{neck_w:.1f}" height="26" rx="12"
-            fill="#2b2b2b" opacity="0.88"/>
+        # Composite overlay on top of base
+        composed = Image.alpha_composite(base_img, overlay_img)
+        return composed
 
-      <!-- arms (behind torso) -->
-      <path d="{left_arm}"  fill="#2b2b2b" opacity="0.72"/>
-      <path d="{right_arm}" fill="#2b2b2b" opacity="0.72"/>
+    return base_img
 
-      <!-- torso -->
-      <path d="{torso_path}" fill="#2b2b2b" opacity="0.90"/>
-
-      <!-- legs -->
-      <path d="{left_leg}"  fill="#2b2b2b" opacity="0.85"/>
-      <path d="{right_leg}" fill="#2b2b2b" opacity="0.85"/>
-
-      <!-- waist hint -->
-      <path d="M {cx-wx:.1f},{y_waist:.1f} Q {cx:.1f},{y_waist+10:.1f} {cx+wx:.1f},{y_waist:.1f}"
-            fill="none" stroke="#ffffff" stroke-width="2" opacity="0.18"/>
-    </svg>
-    """
-    return svg
+# ------------------------------------------------------------
+# Display avatar
+# ------------------------------------------------------------
 
 with right:
-    st.subheader("Avatar (exaggerated V-taper)")
+    st.subheader("Avatar")
 
-    if pd.isna(swr):
-        st.info("Enter measurements to render avatar.")
-    else:
-        svg = make_v_avatar_svg(shoulders_in, waist_in, hips_in, swr)
+    base_avatar = get_base_avatar_name(swr)
+    overlay_avatar = get_overlay_name(whtr)
 
-        b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+    try:
+        avatar_img = load_avatar_image(base_avatar, overlay_avatar)
+        st.image(avatar_img, use_container_width=True)
 
-        st.markdown(
-            f"""
-            <div style="display:flex; justify-content:center;">
-                <img src="data:image/svg+xml;base64,{b64}" 
-                     style="width:100%; max-width:420px;" />
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.caption(
+            f"Base: **{base_avatar.replace('.png','')}** | "
+            f"Overlay: **{overlay_avatar.replace('.png','')}**"
         )
 
-        target_swr = 1.40
+    except Exception as e:
+        st.error("Could not load avatar images.")
+        st.caption(str(e))
 
-        if swr < target_swr:
-            waist_needed = shoulders_in / target_swr
-            shoulders_needed = waist_in * target_swr
+    target_swr = 1.40
 
-            st.caption(
-                f"To hit Strong V (≥{target_swr:.2f}): "
-                f"If shoulders stay {shoulders_in:.2f}\", waist ≈ {waist_needed:.1f}\" | "
-                f"If waist stays {waist_in:.2f}\", shoulders ≈ {shoulders_needed:.1f}\""
-            )
-        else:
-            st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
-# Main focus next week
-misses = []
-if not logging_ok:
-    misses.append(f"log at least {MIN_LOG_DAYS}/7 days")
-if pd.notna(cal_ok_pct) and float(cal_ok_pct) < 70:
-    misses.append("tighten calories to within ±10% more often")
-if pd.notna(macro_ok_pct) and float(macro_ok_pct) < 60:
-    misses.append("hit protein/carbs/fat targets within ±10%")
-if not training_ok:
-    misses.append(f"hit {TARGET_WORKOUTS} workouts + {TARGET_MINUTES} min")
-if pd.notna(steps_avg) and float(steps_avg) < TARGET_STEPS:
-    misses.append("push steps toward 8k/day")
+    if pd.notna(swr) and swr < target_swr:
+        waist_needed = shoulders_in / target_swr
+        shoulders_needed = waist_in * target_swr
 
-if misses:
-    st.caption("Main focus next week: " + " • ".join(misses))
-else:
-    st.caption("Main focus next week: keep doing what you’re doing — this is clean.")
-# -------------------------
-# Small helpers
-# -------------------------
-def _within_tol(actual, target, tol):
-    if pd.isna(actual) or pd.isna(target) or float(target) == 0:
-        return False
-    return abs(float(actual) - float(target)) <= (abs(float(target)) * float(tol))
-
-def _safe_mean(series):
-    s = pd.to_numeric(series, errors="coerce")
-    return s.mean() if s.notna().any() else pd.NA
-
-def _score_label(score: int) -> str:
-    if score >= 85: return "Locked In 🔥"
-    if score >= 70: return "Solid ✅"
-    if score >= 55: return "Okay — Tighten Up"
-    return "Tighten Up ⚠️"
+        st.caption(
+            f"To hit Strong V (≥{target_swr:.2f}): "
+            f'If shoulders stay {shoulders_in:.2f}", waist ≈ {waist_needed:.1f}" | '
+            f'If waist stays {waist_in:.2f}", shoulders ≈ {shoulders_needed:.1f}"'
+        )
+    elif pd.notna(swr):
+        st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
 
 # ============================================================
 # This week so far (Mon -> today)
