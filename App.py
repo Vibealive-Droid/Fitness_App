@@ -11,6 +11,8 @@ from PIL import Image
 from io import BytesIO
 from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
+import json
+from pathlib import Path
 
 # ============================================================
 # Config: chart scales (edit here)
@@ -1415,6 +1417,39 @@ if pd.notna(bulk_quality_score):
 detail_rows = [{"Component": k, "Score (/10)": None if pd.isna(v) else round(float(v), 1)} for k, v in components.items()]
 detail_df = pd.DataFrame(detail_rows)
 st.dataframe(detail_df, hide_index=True)
+
+MEASUREMENTS_FILE = Path("measurements.json")
+
+def load_saved_measurements():
+    defaults = {
+        "height_in": float(DEFAULT_HEIGHT_IN),
+        "weight_lb_manual": float(DEFAULT_WEIGHT_LB),
+        "shoulders_in": float(DEFAULT_SHOULDERS),
+        "waist_in": float(DEFAULT_WAIST),
+        "hips_in": float(DEFAULT_HIPS),
+    }
+
+    if MEASUREMENTS_FILE.exists():
+        try:
+            with open(MEASUREMENTS_FILE, "r") as f:
+                saved = json.load(f)
+            defaults.update(saved)
+        except Exception:
+            pass
+
+    return defaults
+
+def save_measurements():
+    data = {
+        "height_in": st.session_state.get("height_in"),
+        "weight_lb_manual": st.session_state.get("weight_lb_manual"),
+        "shoulders_in": st.session_state.get("shoulders_in"),
+        "waist_in": st.session_state.get("waist_in"),
+        "hips_in": st.session_state.get("hips_in"),
+    }
+
+    with open(MEASUREMENTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 # ============================================================
 # 📐 Shape ratios + avatar (PNG-based)
 # ============================================================
