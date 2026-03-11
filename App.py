@@ -1688,20 +1688,10 @@ def remove_white_background(img):
     return img
 
 
-def load_avatar(base_name, overlay_name):
+def load_avatar(base_name):
     base_path = BASE_DIR / base_name
-    overlay_path = OVERLAY_DIR / overlay_name
-
     base_img = Image.open(base_path).convert("RGBA")
     base_img = prepare_sprite(base_img, canvas_size=(320, 420), target_height=340, y_anchor=28)
-
-    if overlay_path.exists():
-        overlay_img = Image.open(overlay_path).convert("RGBA")
-        overlay_img = remove_white_background(overlay_img)
-        overlay_img = prepare_sprite(overlay_img, canvas_size=(320, 420), target_height=340, y_anchor=28)
-
-        base_img = Image.alpha_composite(base_img, overlay_img)
-
     return base_img
 # ------------------------------------------------------------
 # Display avatar
