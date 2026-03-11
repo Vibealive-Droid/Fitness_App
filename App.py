@@ -1605,8 +1605,6 @@ with left:
 # ------------------------------------------------------------
 
 BASE_DIR = Path("assets/avatars/base")
-OVERLAY_DIR = Path("assets/avatars/overlay")
-
 
 def get_base_avatar_name(swr_val):
 
@@ -1624,74 +1622,56 @@ def get_base_avatar_name(swr_val):
         return "savage_v.png"
 
 
-def get_overlay_name(whtr_val):
+def get_midsection_label(whtr_val):
 
     if pd.isna(whtr_val):
-        return "midsection_ok.png"
+        return "OK"
     elif whtr_val >= 0.53:
-        return "midsection_high.png"
+        return "High"
     elif whtr_val >= 0.50:
-        return "midsection_ok.png"
+        return "OK"
     else:
-        return "midsection_low.png"
+        return "Low"
 
 
 # ------------------------------------------------------------
-# Avatar loader (supports overlays + transparency fix)
+# Avatar loader
 # ------------------------------------------------------------
 
-def prepare_sprite(img, canvas_size=(320, 420), target_height=340, y_anchor=28):
-    """
-    Trim transparent edges, scale sprite to a consistent height,
-    then paste onto a fixed canvas centered horizontally.
-    """
+def prepare_sprite(img, canvas_size=(320,420), target_height=340, y_anchor=28):
+
     img = img.convert("RGBA")
 
-    # Trim transparent border
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
 
-    # Scale proportionally to target height
-    w, h = img.size
-    if h == 0:
-        return Image.new("RGBA", canvas_size, (255, 255, 255, 0))
-
+    w,h = img.size
     scale = target_height / h
+
     new_w = int(w * scale)
     new_h = int(h * scale)
 
-    img = img.resize((new_w, new_h))
+    img = img.resize((new_w,new_h))
 
-    # Paste on fixed transparent canvas
-    canvas = Image.new("RGBA", canvas_size, (255, 255, 255, 0))
+    canvas = Image.new("RGBA", canvas_size, (255,255,255,0))
 
     x = (canvas_size[0] - new_w) // 2
     y = y_anchor
 
-    canvas.paste(img, (x, y), img)
+    canvas.paste(img,(x,y),img)
+
     return canvas
 
 
-def remove_white_background(img):
-    img = img.convert("RGBA")
-    datas = img.getdata()
-    new_data = []
-
-    for item in datas:
-        if item[0] > 240 and item[1] > 240 and item[2] > 240:
-            new_data.append((255, 255, 255, 0))
-        else:
-            new_data.append(item)
-
-    img.putdata(new_data)
-    return img
-
-
 def load_avatar(base_name):
+
     base_path = BASE_DIR / base_name
+
     base_img = Image.open(base_path).convert("RGBA")
-    base_img = prepare_sprite(base_img, canvas_size=(320, 420), target_height=340, y_anchor=28)
+
+    base_img = prepare_sprite(base_img)
+
     return base_img
 # ------------------------------------------------------------
 # Display avatar
@@ -1702,10 +1682,10 @@ with right:
     st.subheader("Avatar")
 
     base_avatar = get_base_avatar_name(swr)
-    overlay_avatar = get_overlay_name(whtr)
+    midsection_status = get_midsection_label(whtr)
 
     # ------------------------------------------------------------
-    # Tier badge + progress to next tier
+    # Tier badge + progress
     # ------------------------------------------------------------
 
     def get_tier_info(swr_val):
@@ -1771,16 +1751,14 @@ with right:
 
     if tier["next_target"] is not None and pd.notna(swr):
 
-        progress = (swr - tier["current_floor"]) / (
-            tier["next_target"] - tier["current_floor"]
-        )
+        progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
 
         progress = max(0.0, min(1.0, progress))
 
         st.progress(progress)
 
         st.caption(
-            f"Progress to **{tier['next_label']}**: {progress * 100:.0f}% "
+            f"Progress to **{tier['next_label']}**: {progress*100:.0f}% "
             f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
         )
 
@@ -1797,14 +1775,14 @@ with right:
 
         avatar_img = load_avatar(base_avatar)
 
-        c1, c2, c3 = st.columns([1, 2, 1])
+        c1, c2, c3 = st.columns([1,2,1])
 
         with c2:
-            st.image(avatar_img, width=300)
+            st.image(avatar_img, width=320)
 
         st.caption(
-            f"Build: **{base_avatar.replace('.png','')}**  |  "
-            f"Midsection: **{overlay_avatar.replace('.png','')}**"
+            f"Build: **{base_avatar.replace('.png','')}** | "
+            f"Midsection: **{midsection_status}**"
         )
 
     except Exception as e:
@@ -1812,9 +1790,8 @@ with right:
         st.error("Could not load avatar.")
         st.caption(str(e))
 
-
     # ------------------------------------------------------------
-    # Ratio guidance
+    # Target calculations
     # ------------------------------------------------------------
 
     target_swr = 1.40
@@ -1832,9 +1809,7 @@ with right:
 
     elif pd.notna(swr):
 
-        st.success(
-            "Strong V territory or better. Keep stacking shoulders and guarding waist."
-        )
+        st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
