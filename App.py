@@ -1799,8 +1799,7 @@ with right:
 
         with c2:
             st.image(avatar_img, width=320)
-
-        score = calculate_physique_score(swr, whtr)
+            score = calculate_physique_score(swr, whtr)
 
             if score is not None:
 
