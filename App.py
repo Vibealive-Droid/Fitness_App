@@ -1658,7 +1658,7 @@ def get_midsection_label(whtr_val):
 # Avatar loader
 # ------------------------------------------------------------
 
-def prepare_sprite(img, canvas_size=(320,420), target_height=340):
+def prepare_sprite(img, canvas_size=(320, 420), target_height=340):
 
     img = img.convert("RGBA")
 
@@ -1674,24 +1674,25 @@ def prepare_sprite(img, canvas_size=(320,420), target_height=340):
 
     img = img.resize((new_w, new_h))
 
-    canvas = Image.new("RGBA", canvas_size, (255,255,255,0))
+    canvas = Image.new("RGBA", canvas_size, (255, 255, 255, 0))
 
     x = (canvas_size[0] - new_w) // 2
     y = canvas_size[1] - new_h - 10   # feet anchor
 
-    canvas.paste(img,(x,y),img)
+    canvas.paste(img, (x, y), img)
 
     return canvas
+
 
 def load_avatar(base_name):
 
     base_path = BASE_DIR / base_name
-
     base_img = Image.open(base_path).convert("RGBA")
-
     base_img = prepare_sprite(base_img)
 
     return base_img
+
+
 # ------------------------------------------------------------
 # Display avatar
 # ------------------------------------------------------------
@@ -1763,22 +1764,23 @@ with right:
                 "next_label": None,
             }
 
-
     tier = get_tier_info(swr)
 
     st.markdown(f"### {tier['emoji']} {tier['label']}")
-    
+
     if tier["next_target"] is not None and pd.notna(swr):
 
-    progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
-    progress = max(0.0, min(1.0, progress))
+        progress = (swr - tier["current_floor"]) / (
+            tier["next_target"] - tier["current_floor"]
+        )
+        progress = max(0.0, min(1.0, progress))
 
-    st.progress(progress)
+        st.progress(progress)
 
-    st.caption(
-        f"Progress to **{tier['next_label']}**: {progress*100:.0f}% "
-        f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
-    )
+        st.caption(
+            f"Progress to **{tier['next_label']}**: {progress * 100:.0f}% "
+            f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
+        )
 
     else:
 
@@ -1798,7 +1800,7 @@ with right:
         )
 
         st.caption("🏆 Mission Accomplished — top tier reached.")
-    
+
     # ------------------------------------------------------------
     # Avatar image
     # ------------------------------------------------------------
@@ -1807,33 +1809,35 @@ with right:
 
         avatar_img = load_avatar(base_avatar)
 
-        c1, c2, c3 = st.columns([1,2,1])
+        c1, c2, c3 = st.columns([1, 2, 1])
 
         with c2:
             st.image(avatar_img, width=320)
-            score = calculate_physique_score(swr, whtr)
 
-            if score is not None:
+        score = calculate_physique_score(swr, whtr)
 
-                st.markdown("### Physique Score")
+        if score is not None:
 
-                st.progress(score / 100)
+            st.markdown("### Physique Score")
 
-                st.markdown(f"**{score} / 100**")
+            st.progress(score / 100)
 
-                if score >= 85:
-                    st.success("Elite Classic Physique territory.")
-                elif score >= 70:
-                    st.info("Strong aesthetic structure.")
-                elif score >= 55:
-                    st.warning("Good base — keep building shoulders and tightening waist.")
-                else:
-                    st.error("Focus on improving shoulder width and waist control.")
+            st.markdown(f"**{score} / 100**")
+
+            if score >= 85:
+                st.success("Elite Classic Physique territory.")
+            elif score >= 70:
+                st.info("Strong aesthetic structure.")
+            elif score >= 55:
+                st.warning("Good base — keep building shoulders and tightening waist.")
+            else:
+                st.error("Focus on improving shoulder width and waist control.")
+
         st.caption(
-            f"Build: **{base_avatar.replace('.png','').replace('_',' ').title()}** | "
+            f"Build: **{base_avatar.replace('.png', '').replace('_', ' ').title()}** | "
             f"Midsection: **{midsection_status}**"
         )
-    
+
     except Exception as e:
 
         st.error("Could not load avatar.")
