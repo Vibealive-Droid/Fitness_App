@@ -1795,7 +1795,7 @@ with right:
 
     try:
 
-        avatar_img = load_avatar(base_avatar, overlay_avatar)
+        avatar_img = load_avatar(base_avatar)
 
         c1, c2, c3 = st.columns([1, 2, 1])
 
