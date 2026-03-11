@@ -1767,23 +1767,37 @@ with right:
     tier = get_tier_info(swr)
 
     st.markdown(f"### {tier['emoji']} {tier['label']}")
+    
+if tier["next_target"] is not None and pd.notna(swr):
 
-    if tier["next_target"] is not None and pd.notna(swr):
+    progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
+    progress = max(0.0, min(1.0, progress))
 
-        progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
+    st.progress(progress)
 
-        progress = max(0.0, min(1.0, progress))
+    st.caption(
+        f"Progress to **{tier['next_label']}**: {progress*100:.0f}% "
+        f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
+    )
 
-        st.progress(progress)
+else:
 
-        st.caption(
-            f"Progress to **{tier['next_label']}**: {progress*100:.0f}% "
-            f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
-        )
+    st.markdown(
+        """
+        <div style="margin: 0.5rem 0 0.25rem 0;">
+            <div style="
+                width: 100%;
+                height: 16px;
+                background: linear-gradient(90deg, #d4af37 0%, #f5d76e 50%, #c9a227 100%);
+                border-radius: 999px;
+                box-shadow: 0 0 8px rgba(212, 175, 55, 0.35);
+            "></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    else:
-
-        st.caption("Top tier reached. Just keep refining.")
+    st.caption("🏆 Mission Accomplished — top tier reached.")
 
 
     # ------------------------------------------------------------
