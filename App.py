@@ -1607,6 +1607,7 @@ with left:
 BASE_DIR = Path("assets/avatars/base")
 OVERLAY_DIR = Path("assets/avatars/overlay")
 
+
 def get_base_avatar_name(swr_val):
 
     if pd.isna(swr_val):
@@ -1635,6 +1636,10 @@ def get_overlay_name(whtr_val):
         return "midsection_low.png"
 
 
+# ------------------------------------------------------------
+# Avatar loader (supports overlays + transparency fix)
+# ------------------------------------------------------------
+
 def load_avatar(base_name, overlay_name):
 
     base_path = BASE_DIR / base_name
@@ -1645,6 +1650,18 @@ def load_avatar(base_name, overlay_name):
     if overlay_path.exists():
 
         overlay_img = Image.open(overlay_path).convert("RGBA")
+
+        # Remove white background automatically
+        datas = overlay_img.getdata()
+        new_data = []
+
+        for item in datas:
+            if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                new_data.append((255, 255, 255, 0))
+            else:
+                new_data.append(item)
+
+        overlay_img.putdata(new_data)
 
         if overlay_img.size != base_img.size:
             overlay_img = overlay_img.resize(base_img.size)
@@ -1659,6 +1676,7 @@ def load_avatar(base_name, overlay_name):
 # ------------------------------------------------------------
 
 with right:
+
     st.subheader("Avatar")
 
     base_avatar = get_base_avatar_name(swr)
@@ -1669,6 +1687,7 @@ with right:
     # ------------------------------------------------------------
 
     def get_tier_info(swr_val):
+
         if pd.isna(swr_val):
             return {
                 "label": "ATHLETIC",
@@ -1677,6 +1696,7 @@ with right:
                 "next_target": 1.35,
                 "next_label": "STRONG V",
             }
+
         elif swr_val < 1.25:
             return {
                 "label": "BLOCK",
@@ -1685,6 +1705,7 @@ with right:
                 "next_target": 1.25,
                 "next_label": "ATHLETIC",
             }
+
         elif swr_val < 1.35:
             return {
                 "label": "ATHLETIC",
@@ -1693,6 +1714,7 @@ with right:
                 "next_target": 1.35,
                 "next_label": "STRONG V",
             }
+
         elif swr_val < 1.45:
             return {
                 "label": "STRONG V",
@@ -1701,6 +1723,7 @@ with right:
                 "next_target": 1.45,
                 "next_label": "WIDE",
             }
+
         elif swr_val < 1.55:
             return {
                 "label": "WIDE",
@@ -1709,6 +1732,7 @@ with right:
                 "next_target": 1.55,
                 "next_label": "SAVAGE",
             }
+
         else:
             return {
                 "label": "SAVAGE",
@@ -1718,28 +1742,43 @@ with right:
                 "next_label": None,
             }
 
+
     tier = get_tier_info(swr)
 
     st.markdown(f"### {tier['emoji']} {tier['label']}")
 
     if tier["next_target"] is not None and pd.notna(swr):
-        progress = (swr - tier["current_floor"]) / (tier["next_target"] - tier["current_floor"])
+
+        progress = (swr - tier["current_floor"]) / (
+            tier["next_target"] - tier["current_floor"]
+        )
+
         progress = max(0.0, min(1.0, progress))
 
         st.progress(progress)
+
         st.caption(
             f"Progress to **{tier['next_label']}**: {progress * 100:.0f}% "
             f"(current S/W: {swr:.2f} → target: {tier['next_target']:.2f})"
         )
+
     else:
+
         st.caption("Top tier reached. Just keep refining.")
 
+
+    # ------------------------------------------------------------
+    # Avatar image
+    # ------------------------------------------------------------
+
     try:
-        avatar_img = Image.open(BASE_DIR / base_avatar)
+
+        avatar_img = load_avatar(base_avatar, overlay_avatar)
 
         c1, c2, c3 = st.columns([1, 2, 1])
+
         with c2:
-            st.image(avatar_img, width=320)
+            st.image(avatar_img, width=300)
 
         st.caption(
             f"Build: **{base_avatar.replace('.png','')}**  |  "
@@ -1747,12 +1786,19 @@ with right:
         )
 
     except Exception as e:
+
         st.error("Could not load avatar.")
         st.caption(str(e))
+
+
+    # ------------------------------------------------------------
+    # Ratio guidance
+    # ------------------------------------------------------------
 
     target_swr = 1.40
 
     if pd.notna(swr) and swr < target_swr:
+
         waist_needed = shoulders_in / target_swr
         shoulders_needed = waist_in * target_swr
 
@@ -1763,8 +1809,10 @@ with right:
         )
 
     elif pd.notna(swr):
-        st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
-        
+
+        st.success(
+            "Strong V territory or better. Keep stacking shoulders and guarding waist."
+        )
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
