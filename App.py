@@ -1642,14 +1642,18 @@ def get_overlay_name(whtr_val):
 
 def load_avatar(base_name, overlay_name):
 
+    AVATAR_SIZE = (320, 420)
+
     base_path = BASE_DIR / base_name
     overlay_path = OVERLAY_DIR / overlay_name
 
     base_img = Image.open(base_path).convert("RGBA")
+    base_img = base_img.resize(AVATAR_SIZE)
 
     if overlay_path.exists():
 
         overlay_img = Image.open(overlay_path).convert("RGBA")
+        overlay_img = overlay_img.resize(AVATAR_SIZE)
 
         # Remove white background automatically
         datas = overlay_img.getdata()
@@ -1663,13 +1667,9 @@ def load_avatar(base_name, overlay_name):
 
         overlay_img.putdata(new_data)
 
-        if overlay_img.size != base_img.size:
-            overlay_img = overlay_img.resize(base_img.size)
-
         base_img = Image.alpha_composite(base_img, overlay_img)
 
     return base_img
-
 
 # ------------------------------------------------------------
 # Display avatar
