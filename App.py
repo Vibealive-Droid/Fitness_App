@@ -1625,13 +1625,13 @@ def get_base_avatar_name(swr_val):
 def get_midsection_label(whtr_val):
 
     if pd.isna(whtr_val):
-        return "OK"
+        return "🟡 OK"
     elif whtr_val >= 0.53:
-        return "High"
+        return "🔴 High"
     elif whtr_val >= 0.50:
-        return "OK"
+        return "🟡 OK"
     else:
-        return "Low"
+        return "🟢 Tight"
 
 
 # ------------------------------------------------------------
@@ -1781,10 +1781,10 @@ with right:
             st.image(avatar_img, width=320)
 
         st.caption(
-            f"Build: **{base_avatar.replace('.png','')}** | "
+            f"Build: **{base_avatar.replace('.png','').replace('_',' ').title()}** | "
             f"Midsection: **{midsection_status}**"
         )
-
+    
     except Exception as e:
 
         st.error("Could not load avatar.")
@@ -1810,6 +1810,7 @@ with right:
     elif pd.notna(swr):
 
         st.success("Strong V territory or better. Keep stacking shoulders and guarding waist.")
+        
 # ============================================================
 # This week so far (Mon -> today)
 # ============================================================
