@@ -1473,6 +1473,26 @@ DEFAULT_SHOULDERS = 47.25
 DEFAULT_WAIST = 38.85
 DEFAULT_HIPS = 36.92
 
+def calculate_physique_score(swr, whtr):
+
+    if pd.isna(swr) or pd.isna(whtr):
+        return None
+
+    # Ideal targets
+    ideal_swr = 1.60
+    ideal_whtr = 0.45
+
+    # Score SWR (bigger is better)
+    swr_score = min(swr / ideal_swr, 1.0)
+
+    # Score WHtR (smaller is better)
+    whtr_score = min(ideal_whtr / whtr, 1.0)
+
+    # Weighting (upper body slightly more important)
+    score = (swr_score * 0.6) + (whtr_score * 0.4)
+
+    return round(score * 100)
+
 st.header("📐 Shape ratios + V-taper avatar")
 
 # --- Avatar asset paths
@@ -1780,6 +1800,24 @@ with right:
         with c2:
             st.image(avatar_img, width=320)
 
+        score = calculate_physique_score(swr, whtr)
+
+            if score is not None:
+
+                st.markdown("### Physique Score")
+
+                st.progress(score / 100)
+
+                st.markdown(f"**{score} / 100**")
+
+                if score >= 85:
+                    st.success("Elite Classic Physique territory.")
+                elif score >= 70:
+                    st.info("Strong aesthetic structure.")
+                elif score >= 55:
+                    st.warning("Good base — keep building shoulders and tightening waist.")
+                else:
+                    st.error("Focus on improving shoulder width and waist control.")
         st.caption(
             f"Build: **{base_avatar.replace('.png','').replace('_',' ').title()}** | "
             f"Midsection: **{midsection_status}**"
