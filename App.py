@@ -1658,7 +1658,7 @@ def get_midsection_label(whtr_val):
 # Avatar loader
 # ------------------------------------------------------------
 
-def prepare_sprite(img, canvas_size=(320,420), target_height=340, y_anchor=28):
+def prepare_sprite(img, canvas_size=(320,420), target_height=340):
 
     img = img.convert("RGBA")
 
@@ -1666,23 +1666,22 @@ def prepare_sprite(img, canvas_size=(320,420), target_height=340, y_anchor=28):
     if bbox:
         img = img.crop(bbox)
 
-    w,h = img.size
+    w, h = img.size
     scale = target_height / h
 
     new_w = int(w * scale)
     new_h = int(h * scale)
 
-    img = img.resize((new_w,new_h))
+    img = img.resize((new_w, new_h))
 
     canvas = Image.new("RGBA", canvas_size, (255,255,255,0))
 
     x = (canvas_size[0] - new_w) // 2
-    y = y_anchor
+    y = canvas_size[1] - new_h - 10   # feet anchor
 
     canvas.paste(img,(x,y),img)
 
     return canvas
-
 
 def load_avatar(base_name):
 
