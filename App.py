@@ -1261,6 +1261,12 @@ st.subheader("📈 Growth Decision Engine")
 # Calculate weekly rate properly
 weekly_gain = pd.NA
 
+if score < 70:
+    action = "⚠️ Fix compliance before increasing calories"
+
+if pd.notna(muscle_ratio) and muscle_ratio < 0.4:
+    action = "⚠️ Improve food quality/training before increasing calories"
+
 if pd.notna(weight_change) and "date" in combined.columns:
     tmp = combined[["date", "weight"]].dropna()
     if len(tmp) >= 2:
