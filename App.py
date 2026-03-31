@@ -65,14 +65,23 @@ def with_backoff(fn, tries: int = 6, base: float = 0.8):
 
 @st.cache_resource(show_spinner=False)
 def get_spreadsheet(sheet_id: str):
-    """Cache gspread client + spreadsheet (prevents repeated metadata reads)."""
+    """Cache gspread spreadsheet handle."""
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=SCOPES,
     )
     gc = gspread.authorize(creds)
-    sh = with_backoff(lambda: gc.open_by_key(sheet_id))
-    return sh
+    return with_backoff(lambda: gc.open_by_key(sheet_id))
+
+@st.cache_resource(show_spinner=False)
+def get_measurements_spreadsheet(sheet_id: str):
+    """Cache gspread spreadsheet handle for the measurements workbook."""
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES,
+    )
+    gc = gspread.authorize(creds)
+    return with_backoff(lambda: gc.open_by_key(sheet_id))
 
 sh = None
 try:
@@ -101,14 +110,12 @@ WS_MUSCLE_SETS = "Staging_Muscle_Sets"
 WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
 
 def get_measurements_worksheet():
-    ss = sh.client.open_by_key(MEASUREMENTS_SHEET_ID)
+    ss = get_measurements_spreadsheet(MEASUREMENTS_SHEET_ID)
 
     try:
         ws = ss.worksheet(MEASUREMENTS_WS)
     except gspread.WorksheetNotFound:
         ws = ss.add_worksheet(title=MEASUREMENTS_WS, rows=1000, cols=20)
-
-        # header row
         ws.append_row([
             "timestamp",
             "height_in",
