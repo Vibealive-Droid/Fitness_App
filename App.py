@@ -111,21 +111,7 @@ WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
 
 def get_measurements_worksheet():
     ss = get_measurements_spreadsheet(MEASUREMENTS_SHEET_ID)
-
-    try:
-        ws = ss.worksheet(MEASUREMENTS_WS)
-    except gspread.WorksheetNotFound:
-        ws = ss.add_worksheet(title=MEASUREMENTS_WS, rows=1000, cols=20)
-        ws.append_row([
-            "timestamp",
-            "height_in",
-            "weight_lb_manual",
-            "shoulders_in",
-            "waist_in",
-            "hips_in",
-        ])
-
-    return ws
+    return ss.worksheet(MEASUREMENTS_WS)
 
 # ============================================================
 # Helpers
