@@ -1442,6 +1442,8 @@ DEFAULT_SHOULDERS = 47.25
 DEFAULT_WAIST = 38.85
 DEFAULT_HIPS = 36.92
 
+st.write(st.secrets["gcp_service_account"].get("client_email"))
+
 def load_saved_measurements():
     defaults = {
         "height_in": float(DEFAULT_HEIGHT_IN),
