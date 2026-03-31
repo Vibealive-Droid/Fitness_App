@@ -1436,6 +1436,12 @@ st.dataframe(detail_df, hide_index=True)
 
 MEASUREMENTS_FILE = Path("measurements.json")
 
+DEFAULT_HEIGHT_IN = 71.0
+DEFAULT_WEIGHT_LB = 195.0
+DEFAULT_SHOULDERS = 47.25
+DEFAULT_WAIST = 38.85
+DEFAULT_HIPS = 36.92
+
 def load_saved_measurements():
     defaults = {
         "height_in": float(DEFAULT_HEIGHT_IN),
@@ -1451,7 +1457,6 @@ def load_saved_measurements():
 
         if rows:
             last = rows[-1]
-
             defaults.update({
                 "height_in": float(last.get("height_in", defaults["height_in"])),
                 "weight_lb_manual": float(last.get("weight_lb_manual", defaults["weight_lb_manual"])),
@@ -1459,7 +1464,6 @@ def load_saved_measurements():
                 "waist_in": float(last.get("waist_in", defaults["waist_in"])),
                 "hips_in": float(last.get("hips_in", defaults["hips_in"])),
             })
-
     except Exception:
         pass
 
