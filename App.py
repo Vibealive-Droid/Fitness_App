@@ -1258,7 +1258,15 @@ if pd.notna(muscle_ratio):
 # ============================================================
 st.subheader("📈 Growth Decision Engine")
 
-weekly_gain = weight_change  # already calculated above
+# Calculate weekly rate properly
+weekly_gain = pd.NA
+
+if pd.notna(weight_change) and "date" in combined.columns:
+    tmp = combined[["date", "weight"]].dropna()
+    if len(tmp) >= 2:
+        days = (tmp["date"].iloc[-1] - tmp["date"].iloc[0]).days
+        if days > 0:
+            weekly_gain = weight_change / (days / 7.0)
 
 status = "Unknown"
 action = "Collect more data"
