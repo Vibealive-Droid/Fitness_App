@@ -1254,6 +1254,59 @@ if pd.notna(muscle_ratio):
         st.warning("Low lean gain ratio — weight gain may be mostly fat.")
 
 # ============================================================
+# 📈 Growth / Stall Decision Engine
+# ============================================================
+st.subheader("📈 Growth Decision Engine")
+
+weekly_gain = weight_change  # already calculated above
+
+status = "Unknown"
+action = "Collect more data"
+
+if pd.notna(weekly_gain):
+
+    if weekly_gain >= 1.0 and weekly_gain <= 2.0:
+        status = "🟢 Growing"
+        action = "Hold calories — keep pushing training"
+
+    elif weekly_gain >= 0.25 and weekly_gain < 1.0:
+        status = "🟡 Slightly slow"
+        action = "Increase calories by ~200 kcal (mostly carbs)"
+
+    elif weekly_gain < 0.25:
+        status = "🔴 Stalled"
+        action = "Increase calories by ~250–300 kcal"
+
+    elif weekly_gain > 2.0:
+        status = "⚠️ Too fast"
+        action = "Consider reducing calories slightly (~100–200 kcal)"
+
+# Display
+c1, c2 = st.columns(2)
+
+with c1:
+    st.metric("Weekly weight change", metric_or_dash(weekly_gain, "{:+.2f} lb"))
+
+with c2:
+    st.metric("Status", status)
+
+st.info(f"👉 **Recommended action:** {action}")
+
+current_calories = _last_non_na(combined.get("avg_calories", pd.Series(dtype=float)))
+
+new_target = current_calories
+
+if status == "🟡 Slightly slow":
+    new_target = current_calories + 200
+elif status == "🔴 Stalled":
+    new_target = current_calories + 300
+elif status == "⚠️ Too fast":
+    new_target = current_calories - 150
+
+if pd.notna(current_calories):
+    st.metric("Suggested calorie target", f"{new_target:.0f} kcal")
+
+# ============================================================
 # Dynamic quality score title
 # ============================================================
 if phase == "Lean bulk":
