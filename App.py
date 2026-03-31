@@ -36,9 +36,12 @@ st.title("📊 Body Composition Tracker")
 # ============================================================
 SHEET_ID = st.secrets["SHEET_ID"]
 
+MEASUREMENTS_SHEET_ID = "1oeVoLyhI75qUO4Zrs8VEtHYR72fcMlExRrSam3hOHsM"
+MEASUREMENTS_WS = "Saved_Measurements"
+
 SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
 
 def _is_429(e: Exception) -> bool:
@@ -96,6 +99,26 @@ WS_WORKOUT_LOG = "Staging_Workout_Log"
 WS_FOOD_LOG = "Staging_MacroFactor_FoodLog"
 WS_MUSCLE_SETS = "Staging_Muscle_Sets"
 WS_MUSCLE_VOLUME = "Staging_Muscle_Volume"
+
+def get_measurements_worksheet():
+    ss = sh.client.open_by_key(MEASUREMENTS_SHEET_ID)
+
+    try:
+        ws = ss.worksheet(MEASUREMENTS_WS)
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title=MEASUREMENTS_WS, rows=1000, cols=20)
+
+        # header row
+        ws.append_row([
+            "timestamp",
+            "height_in",
+            "weight_lb_manual",
+            "shoulders_in",
+            "waist_in",
+            "hips_in",
+        ])
+
+    return ws
 
 # ============================================================
 # Helpers
@@ -1429,8 +1452,25 @@ def load_saved_measurements():
         "hips_in": float(DEFAULT_HIPS),
     }
 
-import json
-from pathlib import Path
+    try:
+        ws = get_measurements_worksheet()
+        rows = ws.get_all_records()
+
+        if rows:
+            last = rows[-1]
+
+            defaults.update({
+                "height_in": float(last.get("height_in", defaults["height_in"])),
+                "weight_lb_manual": float(last.get("weight_lb_manual", defaults["weight_lb_manual"])),
+                "shoulders_in": float(last.get("shoulders_in", defaults["shoulders_in"])),
+                "waist_in": float(last.get("waist_in", defaults["waist_in"])),
+                "hips_in": float(last.get("hips_in", defaults["hips_in"])),
+            })
+
+    except Exception:
+        pass
+
+    return defaults
 
 MEASUREMENTS_FILE = Path("measurements.json")
 
@@ -1454,16 +1494,17 @@ def load_saved_measurements():
     return defaults
 
 def save_measurements():
-    data = {
-        "height_in": st.session_state.get("height_in"),
-        "weight_lb_manual": st.session_state.get("weight_lb_manual"),
-        "shoulders_in": st.session_state.get("shoulders_in"),
-        "waist_in": st.session_state.get("waist_in"),
-        "hips_in": st.session_state.get("hips_in"),
-    }
+    row = [
+        pd.Timestamp.now(tz="America/Montreal").strftime("%Y-%m-%d %H:%M:%S"),
+        st.session_state.get("height_in"),
+        st.session_state.get("weight_lb_manual"),
+        st.session_state.get("shoulders_in"),
+        st.session_state.get("waist_in"),
+        st.session_state.get("hips_in"),
+    ]
 
-    with open(MEASUREMENTS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    ws = get_measurements_worksheet()
+    ws.append_row(row, value_input_option="USER_ENTERED")
 # ============================================================
 # 📐 Shape ratios + avatar (PNG-based)
 # ============================================================
@@ -1472,6 +1513,10 @@ DEFAULT_WEIGHT_LB = float(w0) if (w0 is not None and not pd.isna(w0)) else 195.0
 DEFAULT_SHOULDERS = 47.25
 DEFAULT_WAIST = 38.85
 DEFAULT_HIPS = 36.92
+
+# --- add near your config/constants ---
+MEASUREMENTS_SHEET_ID = "1oeVoLyhI75qUO4Zrs8VEtHYR72fcMlExRrSam3hOHsM"
+MEASUREMENTS_WS = "Saved_Measurements"
 
 def calculate_physique_score(swr, whtr):
 
