@@ -1487,29 +1487,25 @@ def load_saved_measurements():
     return defaults
 
 def save_measurements():
-    row = [
-        pd.Timestamp.now(tz="America/Montreal").strftime("%Y-%m-%d %H:%M:%S"),
-        st.session_state.get("height_in"),
-        st.session_state.get("weight_lb_manual"),
-        st.session_state.get("shoulders_in"),
-        st.session_state.get("waist_in"),
-        st.session_state.get("hips_in"),
-    ]
+    try:
+        ws = get_measurements_worksheet()
 
-    ws = get_measurements_worksheet()
-    ws.append_row(row, value_input_option="USER_ENTERED")
-# ============================================================
-# 📐 Shape ratios + avatar (PNG-based)
-# ============================================================
-DEFAULT_HEIGHT_IN = 71.0
-DEFAULT_WEIGHT_LB = float(w0) if (w0 is not None and not pd.isna(w0)) else 195.0
-DEFAULT_SHOULDERS = 47.25
-DEFAULT_WAIST = 38.85
-DEFAULT_HIPS = 36.92
+        row = [
+            pd.Timestamp.now(tz="America/Montreal").strftime("%Y-%m-%d %H:%M:%S"),
+            st.session_state.get("height_in"),
+            st.session_state.get("weight_lb_manual"),
+            st.session_state.get("shoulders_in"),
+            st.session_state.get("waist_in"),
+            st.session_state.get("hips_in"),
+        ]
 
-# --- add near your config/constants ---
-MEASUREMENTS_SHEET_ID = "1oeVoLyhI75qUO4Zrs8VEtHYR72fcMlExRrSam3hOHsM"
-MEASUREMENTS_WS = "Saved_Measurements"
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        st.success("✅ Saved to Google Sheets")
+
+    except gspread.WorksheetNotFound:
+        st.error("❌ Worksheet 'Saved_Measurements' was not found. Create that tab manually in the spreadsheet first.")
+    except Exception as e:
+        st.error(f"❌ Failed to save measurements: {e}")
 
 def calculate_physique_score(swr, whtr):
 
