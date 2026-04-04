@@ -1018,9 +1018,9 @@ if "training_minutes_total" in combined.columns and "volume_total" in combined.c
 st.subheader("✅ Compliance (Mon → Sun) — Matt Standard")
 
 # ---- Targets (edit here)
-TARGET_WORKOUTS = 4
+TARGET_WORKOUTS = 5
 TARGET_MINUTES = 200
-TARGET_STEPS = 8000
+TARGET_STEPS = 6000
 CAL_TOL = 0.10
 MACRO_TOL = 0.10
 MIN_LOG_DAYS = 6  # Matt standard: 6/7 logged days
