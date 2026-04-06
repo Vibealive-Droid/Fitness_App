@@ -1522,8 +1522,9 @@ def load_saved_measurements():
         ws = get_measurements_worksheet()
         rows = ws.get_all_records()
 
-        if rows:
-            last = rows[-1]
+        if rows and len(rows) > 0:
+            last = rows[-1]  # 👈 always latest entry
+
             defaults.update({
                 "height_in": float(last.get("height_in", defaults["height_in"])),
                 "weight_lb_manual": float(last.get("weight_lb_manual", defaults["weight_lb_manual"])),
@@ -1531,31 +1532,13 @@ def load_saved_measurements():
                 "waist_in": float(last.get("waist_in", defaults["waist_in"])),
                 "hips_in": float(last.get("hips_in", defaults["hips_in"])),
             })
-    except Exception:
-        pass
+
+    except Exception as e:
+        print(f"Load error: {e}")  # optional debug
 
     return defaults
 
 MEASUREMENTS_FILE = Path("measurements.json")
-
-def load_saved_measurements():
-    defaults = {
-        "height_in": float(DEFAULT_HEIGHT_IN),
-        "weight_lb_manual": float(DEFAULT_WEIGHT_LB),
-        "shoulders_in": float(DEFAULT_SHOULDERS),
-        "waist_in": float(DEFAULT_WAIST),
-        "hips_in": float(DEFAULT_HIPS),
-    }
-
-    if MEASUREMENTS_FILE.exists():
-        try:
-            with open(MEASUREMENTS_FILE, "r") as f:
-                saved = json.load(f)
-            defaults.update(saved)
-        except Exception:
-            pass
-
-    return defaults
 
 def save_measurements():
     try:
